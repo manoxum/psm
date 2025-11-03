@@ -10,12 +10,7 @@ import * as cp from "node:child_process";
 import {fetch} from "./deploy";
 import {psmLockup} from "./common";
 import {getLatestFolder, gitAddPath, sanitizeLabel} from "../utils/fs";
-
-
-
-
-
-
+import {CreateCustom} from "./execute";
 
 export interface MigrateOptions {
     schema?:string
@@ -37,13 +32,17 @@ export async function commit(opts:MigrateOptions ) {
     const next = Path.join( psm.psm.output, "next/migration.next.sql");
     const check = Path.join( psm.psm.output, "next/migration.next.check.sql");
 
+    let label = "";
+    if( !!opts.label ) label = ` - ${sanitizeLabel( opts.label )}`;
+    const nextRev = Path.join( home, `psm/revisions/schema/${psm.migration.instante}${label}`);
+
+
     if( !fs.existsSync( check) ) {
         throw new Error( "Migrate error: next/migration.next.check.sql file not found!" );
     }
     if( !fs.existsSync( next) ) {
         throw new Error(  "Migrate error: next/migration.next.sql file not found!" );
     }
-
 
     const migrator = driver.migrator({
         url: process.env[ psm.psm.url ],
@@ -101,9 +100,16 @@ export async function commit(opts:MigrateOptions ) {
         throw new Error( "Migrate error: Commit migration failed!" );
     }
 
+    const custom = CreateCustom({
+        home: home,
+        nextRev: nextRev,
+        migrator: migrator
+    }, "functions", "triggers", "views" );
+
+    await custom.execute();
+
     const moment = require('moment');
-    let label = "";
-    if( !!opts.label ) label = ` - ${sanitizeLabel( opts.label )}`;
+
     let preview:PSMConfigFile;
     const last = getLatestFolder( Path.join( home, `psm/revisions/schema`));
     if( !!last ){
@@ -111,20 +117,20 @@ export async function commit(opts:MigrateOptions ) {
     }
     psm.migration = {
         revision: `${ moment().format( 'YYYYMMDDHHmmss' ) } - ${psm.psm.migration}`,
-        instate: moment().format( 'YYYYMMDDHHmmss' ),
+        instante: moment().format( 'YYYYMMDDHHmmss' ),
         preview: preview?.migration.revision,
         label: opts.label
     }
-    const nextRev = Path.join( home, `psm/revisions/schema/${psm.migration.instate}${label}`);
 
     fs.mkdirSync( nextRev, { recursive: true });
+    custom.createFiles();
     fs.renameSync( next, Path.join( nextRev, "migration.sql" ) );
     fs.writeFileSync( Path.join( nextRev, "psm.yml" ), yaml.stringify( psm ) );
     fs.writeFileSync( Path.join(nextRev, "backup.sql"), dump.output );
 
     fs.unlinkSync( check );
 
-    const archiveName = Path.join(home || process.cwd(), `psm/revisions/schema/${psm.migration.instate}${label}.tar.gz`);
+    const archiveName = Path.join(home || process.cwd(), `psm/revisions/schema/${psm.migration.instante}${label}.tar.gz`);
 
     await tar.c(
         {
@@ -143,3 +149,4 @@ export async function commit(opts:MigrateOptions ) {
 
     gitAddPath(home || process.cwd(), archiveName );
 }
+

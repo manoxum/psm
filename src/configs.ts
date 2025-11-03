@@ -14,7 +14,7 @@ export interface PSMConfigFile {
     },
     migration?: {
         revision: string,
-        instate: string,
+        instante: string,
         preview: string,
         label: string,
     }

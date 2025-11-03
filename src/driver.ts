@@ -140,6 +140,12 @@ export interface PSMMigrated {
     migrated?:Migrated[]
 }
 
+export interface PSMExecute {
+    messages:string[]
+    error?:any
+    success?:boolean
+}
+
 export interface PSMDumpResponse {
     error?:Error,
     output?:string
@@ -150,6 +156,7 @@ export interface PSMMigrator {
     test():Promise<PSMMigrationResult>,
     migrate():Promise<PSMMigrationResult>,
     dump():Promise<PSMDumpResponse>,
+    execute(str:string):Promise<PSMExecute>
 }
 
 export interface QueryBuilderResult {

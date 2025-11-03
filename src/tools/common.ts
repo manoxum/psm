@@ -13,6 +13,7 @@ const prisma = [
 
 export interface CommonSchema {
     schema:string
+    driver?:string
 }
 export async function psmLockup( opts:CommonSchema ){
     let schema = opts.schema;
@@ -40,7 +41,11 @@ export async function psmLockup( opts:CommonSchema ){
     console.log(`PSM migrate using ${psm_yml}`);
     const psm = yaml.parse( fs.readFileSync( psm_yml ).toString() ) as PSMConfigFile;
 
-    const driver = await import( psm.psm.driver ) as PSMDriver;
+    const driver = await import( opts?.driver ?? psm.psm.driver ) as PSMDriver;
+
+    if(!!psm.migration && !psm.migration.instante && psm.migration["instate"]){
+        psm.migration.instante = psm.migration["instate"];
+    }
 
     return { schema, psm_yml, psm_sql, psm, driver, home }
 }
