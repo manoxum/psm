@@ -11,6 +11,7 @@ import {fetch} from "./deploy";
 import {psmLockup} from "./common";
 import {getLatestFolder, gitAddPath, sanitizeLabel} from "../utils/fs";
 import {CreateCustom} from "./execute";
+import moment from "moment/moment";
 
 export interface MigrateOptions {
     schema?:string
@@ -20,6 +21,8 @@ export interface MigrateOptions {
 }
 export async function commit(opts:MigrateOptions ) {
     require('dotenv').config();
+    const moment = require('moment');
+
     if( opts.generate ) {
         let command = opts["generate-command"];
         if( !command) command = "prisma generate"
@@ -32,6 +35,19 @@ export async function commit(opts:MigrateOptions ) {
     const next = Path.join( psm.psm.output, "next/migration.next.sql");
     const check = Path.join( psm.psm.output, "next/migration.next.check.sql");
 
+
+    let preview:PSMConfigFile;
+    const last = getLatestFolder( Path.join( home, `psm/revisions/schema`));
+    if( !!last ){
+        preview = yaml.parse( fs.readFileSync( Path.join( home, "psm/revisions/schema", last, "psm.yml")).toString() ) as  PSMConfigFile;
+    }
+
+    psm.migration = {
+        revision: `${ moment().format( 'YYYYMMDDHHmmss' ) } - ${psm.psm.migration}`,
+        instante: moment().format( 'YYYYMMDDHHmmss' ),
+        preview: preview?.migration.revision,
+        label: opts.label
+    }
     let label = "";
     if( !!opts.label ) label = ` - ${sanitizeLabel( opts.label )}`;
     const nextRev = Path.join( home, `psm/revisions/schema/${psm.migration.instante}${label}`);
@@ -108,19 +124,7 @@ export async function commit(opts:MigrateOptions ) {
 
     await custom.execute();
 
-    const moment = require('moment');
 
-    let preview:PSMConfigFile;
-    const last = getLatestFolder( Path.join( home, `psm/revisions/schema`));
-    if( !!last ){
-        preview = yaml.parse( fs.readFileSync( Path.join( home, "psm/revisions/schema", last, "psm.yml")).toString() ) as  PSMConfigFile;
-    }
-    psm.migration = {
-        revision: `${ moment().format( 'YYYYMMDDHHmmss' ) } - ${psm.psm.migration}`,
-        instante: moment().format( 'YYYYMMDDHHmmss' ),
-        preview: preview?.migration.revision,
-        label: opts.label
-    }
 
     fs.mkdirSync( nextRev, { recursive: true });
     custom.createFiles();
