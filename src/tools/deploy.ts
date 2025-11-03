@@ -114,7 +114,7 @@ export async function fetch(opts:FetchOptions){
     });
 
     if( !!missedPreviews.length){
-        const missed = missedPreviews.map(n=> `${n.psm.psm.migration} - ${n.psm.migration.label} at ${n.psm.migration.instate}`  );
+        const missed = missedPreviews.map(n=> `${n.psm.psm.migration} - ${n.psm.migration.label} at ${n.psm.migration.instante}`  );
         return {
             revs: revs,
             error: new Error(`MISSING PREVIEW migration for...\n ${missed.join(", ")}`),
@@ -142,7 +142,7 @@ export async function fetch(opts:FetchOptions){
     for (let i = 0; i < revs.length; i++) {
         let next = revs[i];
         let pl = !!next.psm.migration.label?.length ? ` - ${next.psm.migration.label} `: " "
-        let label = `RevNo ${ chalk.bold(next.psm.migration.revision)}${pl}commited at ${next.psm.migration.instate}`;
+        let label = `RevNo ${ chalk.bold(next.psm.migration.revision)}${pl}commited at ${next.psm.migration.instante}`;
         const mig  = migrated.migrated.find( value => value.sid === next.psm.psm.migration );
         next.label = label;
         if( !!mig ) {
