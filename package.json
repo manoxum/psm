@@ -1,6 +1,6 @@
 {
   "name": "@prisma-psm/core",
-  "version": "1.0.24",
+  "version": "1.0.27",
   "description": "PSM - Prisma SAFE MIGRATE: ferramenta CLI para migração segura de bancos Prisma com suporte avançado.",
   "main": "src/index.js",
   "scripts": {

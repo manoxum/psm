@@ -11,7 +11,6 @@ import {fetch} from "./deploy";
 import {psmLockup} from "./common";
 import {getLatestFolder, gitAddPath, sanitizeLabel} from "../utils/fs";
 import {CreateCustom} from "./execute";
-import moment from "moment/moment";
 
 export interface MigrateOptions {
     schema?:string
@@ -107,26 +106,28 @@ export async function commit(opts:MigrateOptions ) {
         throw dump.error;
     }
 
-    result = await migrator.migrate();
-    if( !result.success ) {
-        console.error( result.error );
-        result.messages.forEach( error => {
-            console.error( error );
-        });
-        throw new Error( "Migrate error: Commit migration failed!" );
-    }
-
+    fs.mkdirSync( nextRev, { recursive: true });
     const custom = CreateCustom({
         home: home,
         nextRev: nextRev,
         migrator: migrator
     }, "functions", "triggers", "views" );
 
-    await custom.execute();
+    result = await migrator.migrate( custom ).catch( reason => {
+        return  { error: reason, success: false };
+    });
 
+    if( !result.success ) {
+        console.error( result.error );
+        result.messages.forEach( error => {
+            console.error( error );
+        });
+        if( fs.existsSync( nextRev ) ) {
+            fs.rmdirSync( nextRev, { recursive: true });
+        }
+        throw new Error( `Migrate error: Commit migration failed! ${home}` );
+    }
 
-
-    fs.mkdirSync( nextRev, { recursive: true });
     custom.createFiles();
     fs.renameSync( next, Path.join( nextRev, "migration.sql" ) );
     fs.writeFileSync( Path.join( nextRev, "psm.yml" ), yaml.stringify( psm ) );

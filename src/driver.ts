@@ -151,12 +151,24 @@ export interface PSMDumpResponse {
     output?:string
 }
 
+export type CustomScript = {
+    group:string,
+    filename:string,
+    raw:string
+}
+export interface CustomResources {
+    get resources():Record<string, CustomScript[]>,
+    execute():Promise<void>
+    createFiles():void
+}
+
 export interface PSMMigrator {
     core():Promise<PSMMigrationResult>,
     test():Promise<PSMMigrationResult>,
-    migrate():Promise<PSMMigrationResult>,
+    migrate( custom?:CustomResources ):Promise<PSMMigrationResult>,
     dump():Promise<PSMDumpResponse>,
-    execute(str:string):Promise<PSMExecute>
+    execute(str:CustomScript[]):Promise<PSMExecute>
+    executeRaw(str:CustomScript[]):string
 }
 
 export interface QueryBuilderResult {
