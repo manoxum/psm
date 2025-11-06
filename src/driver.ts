@@ -166,6 +166,7 @@ export interface PSMMigrator {
     core():Promise<PSMMigrationResult>,
     test():Promise<PSMMigrationResult>,
     migrate( custom?:CustomResources ):Promise<PSMMigrationResult>,
+    migrateRaw( custom?:CustomResources ):string,
     dump():Promise<PSMDumpResponse>,
     execute(str:CustomScript[]):Promise<PSMExecute>
     executeRaw(str:CustomScript[]):string

@@ -129,7 +129,8 @@ export async function commit(opts:MigrateOptions ) {
     }
 
     custom.createFiles();
-    fs.renameSync( next, Path.join( nextRev, "migration.sql" ) );
+
+    fs.writeFileSync( Path.join( nextRev, "migration.sql" ), migrator.migrateRaw( custom ) );
     fs.writeFileSync( Path.join( nextRev, "psm.yml" ), yaml.stringify( psm ) );
     fs.writeFileSync( Path.join(nextRev, "backup.sql"), dump.output );
 
@@ -151,6 +152,7 @@ export async function commit(opts:MigrateOptions ) {
     console.log(chalk.green(`✔ Migration compactada: ${archiveName}`));
 
     fs.rmSync(nextRev, { recursive: true, force: true });
+    fs.unlinkSync( next );
 
     gitAddPath(home || process.cwd(), archiveName );
 }
