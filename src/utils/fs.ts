@@ -14,9 +14,9 @@ export function sanitizeLabel( label:string ) {
 export function getLatestFolder(basePath:string) {
     if (!fs.existsSync(basePath)) return null;
     const dirs = fs.readdirSync(basePath, { withFileTypes: true })
-        .filter(d => d.isDirectory())
+        .filter(d => d.isFile())
         .map(d => d.name)
-        .filter(name => /^\d{14}( - .+)?$/.test(name))
+        .filter(name => /^\d{14}(\.tar\.gz)?( - .+)?$/.test(name))
         .sort((a, b) => b.localeCompare(a));
     return dirs[0] || null;
 }
