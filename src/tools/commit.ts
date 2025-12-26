@@ -123,7 +123,7 @@ export async function commit(opts:MigrateOptions ) {
             console.error( error );
         });
         if( fs.existsSync( nextRev ) ) {
-            fs.rmdirSync( nextRev, { recursive: true });
+            fs.rmdirSync( nextRev );
         }
         throw new Error( `Migrate error: Commit migration failed! ${home}` );
     }

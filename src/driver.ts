@@ -162,6 +162,9 @@ export interface CustomResources {
     createFiles():void
 }
 
+export type RestoreResult = {
+    result:boolean
+}
 export interface PSMMigrator {
     core():Promise<PSMMigrationResult>,
     test():Promise<PSMMigrationResult>,
@@ -169,6 +172,7 @@ export interface PSMMigrator {
     migrateRaw( custom?:CustomResources ):string,
     dump():Promise<PSMDumpResponse>,
     execute(str:CustomScript[]):Promise<PSMExecute>
+    restore(backup:string):Promise<RestoreResult>
     executeRaw(str:CustomScript[]):string
 }
 
