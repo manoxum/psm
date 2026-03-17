@@ -5,58 +5,61 @@ import * as os from "node:os";
 import * as fs from "node:fs";
 import * as yaml from "yaml";
 import * as Path from "node:path";
-import {PSMConfigFile} from "../configs";
+import { PSMConfigFile } from "../configs";
 import chalk from "chalk";
-import {PSMDriver} from "../driver";
-import {psmLockup} from "./common";
+import { PSMDriver } from "../driver";
+import { psmLockup } from "./common";
 
 export interface DeployOptions {
-    schema?:string
-    generate?:string
-    label?:string
-    "generate-command":string
+    schema?: string;
+    generate?: string;
+    label?: string;
+    "generate-command": string;
 }
 
-const TAG = "PSM DEPLOY >"
+const TAG = "PSM DEPLOY >";
 
-export async function deploy( opts: DeployOptions) {
+export async function deploy(opts: DeployOptions) {
     require('dotenv').config();
 
-    const { psm, psm_sql, driver, home} = await psmLockup({ schema: opts.schema });
+    const { psm, psm_sql, driver, home } = await psmLockup({ schema: opts.schema });
 
     let migrator = driver.migrator({
         url: process.env[psm.psm.url],
         migrate: "",
         check: "",
-        core: fs.readFileSync( psm_sql ).toString(),
+        core: fs.readFileSync(psm_sql).toString(),
     });
 
     let result = await migrator.core();
-    if( !result.success ) {
-        console.error( result.error );
-        result.messages.forEach( error => {
-            console.error( error );
+    if (!result.success) {
+        console.error(result.error);
+        result.messages.forEach(error => {
+            console.error(error);
         });
-        throw new Error( "Migrate error: Core failed!" );
+        throw new Error("Migrate error: Core failed!");
     }
 
     const pullResponse = await fetch({
         home: home,
         driver: driver,
-        psm: psm
+        psm: psm,
     });
 
-    if( pullResponse.error ){
+    if (pullResponse.error) {
         pullResponse.clean();
-        throw  pullResponse.error;
+        throw pullResponse.error;
     }
 
-    if( !pullResponse.revs?.length ) {
+    if (!pullResponse.revs?.length) {
         pullResponse.clean();
-        throw new Error(`No migrate commited! Use ${ chalk.bold("psm migrate commit")} first!`);
+        throw new Error(`No migrate commited! Use ${chalk.bold("psm migrate commit")} first!`);
     }
 
-    const revs = pullResponse.revs;
+    let revs = pullResponse.revs;
+
+    // Ordena as revisões por instante (cronologicamente)
+    revs.sort((a, b) => a.psm.migration.instante.localeCompare(b.psm.migration.instante));
 
     for (let i = 0; i < revs.length; i++) {
         let next = revs[i];
@@ -66,40 +69,44 @@ export async function deploy( opts: DeployOptions) {
             check: "",
             core: "",
         });
-        next.message.forEach( console.log );
+        next.message.forEach(console.log);
 
-        if( next.pulled ) return;
-        else if( i === 0 && !!next.backup ) {
-            await migrator.restore( next.backup );
+        // CORREÇÃO: se já foi migrada, apenas continua para a próxima
+        if (next.pulled) continue;
+
+        // Restaura backup apenas na primeira revisão não aplicada (se houver)
+        if (i === 0 && !!next.backup) {
+            await migrator.restore(next.backup);
         }
 
         const result = await migrator.migrate();
 
-        if( !result.success ) {
-            console.error( result.error );
-            result.messages.forEach( error => {
-                console.error( error );
+        if (!result.success) {
+            console.error(result.error);
+            result.messages.forEach(error => {
+                console.error(error);
             });
-            console.error( `${next.label} is migrated at ${next.date} - ${chalk.redBright.bold( "FAILED")}` );
-            throw new Error( "Migrate error: Push migration failed!" );
+            console.error(`${next.label} is migrated at ${next.date} - ${chalk.redBright.bold("FAILED")}`);
+            throw new Error("Migrate error: Push migration failed!");
         }
-        console.log( `${next.label} is migrated at ${next.date} - ${chalk.greenBright.bold( "SUCCESS")}` );
+        console.log(`${next.label} is migrated at ${next.date} - ${chalk.greenBright.bold("SUCCESS")}`);
     }
 
     pullResponse.clean();
 }
 
 export interface FetchOptions {
-    home:string,
-    driver:PSMDriver,
-    psm:PSMConfigFile
+    home: string;
+    driver: PSMDriver;
+    psm: PSMConfigFile;
 }
+
 export async function fetch(opts: FetchOptions) {
     const revisionsDir = Path.join(opts.home, "psm/revisions/schema");
     const revFiles = fs.readdirSync(revisionsDir).filter(n => n.endsWith(".tar.gz"));
 
     const revs: Array<{
-        temp:string
+        temp: string;
         psm: PSMConfigFile;
         migrate: string;
         backup?: string;
@@ -132,7 +139,7 @@ export async function fetch(opts: FetchOptions) {
         const psm = yaml.parse(fs.readFileSync(psmPath, "utf-8")) as PSMConfigFile;
         const migrate = fs.readFileSync(migrationPath, "utf-8");
 
-        const rev:typeof revs[number] = {
+        const rev: typeof revs[number] = {
             psm,
             migrate,
             pulled: false,
@@ -140,10 +147,10 @@ export async function fetch(opts: FetchOptions) {
             message: [],
             date: null,
             backup: backup,
-            temp: tempDir
-        }
+            temp: tempDir,
+        };
 
-        if( fs.existsSync( backup) ) rev.backup = backup;
+        if (fs.existsSync(backup)) rev.backup = backup;
         revs.push(rev);
     }
 
@@ -158,7 +165,7 @@ export async function fetch(opts: FetchOptions) {
         return {
             revs,
             error: new Error(`MISSING PREVIEW migration for...\n${missed.join(", ")}`),
-            clean(){}
+            clean() {},
         };
     }
 
@@ -187,10 +194,10 @@ export async function fetch(opts: FetchOptions) {
 
     return {
         revs,
-        clean(){
-            revs.forEach( value => {
+        clean() {
+            revs.forEach(value => {
                 fs.rmSync(value.temp, { recursive: true, force: true });
-            })
-        }
+            });
+        },
     };
 }
