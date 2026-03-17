@@ -9,7 +9,13 @@ const command:CommandModule = {
         return args;
     },
     handler: args => {
-        generate()
+        try {
+            generate()
+        } catch ( e ) {
+            console.error( e )
+            console.log( e )
+            throw e;
+        }
     }
 }
 

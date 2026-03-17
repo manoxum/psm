@@ -1,6 +1,6 @@
 // filename: src/tools/deploy.ts
 
-import tar from "tar";
+import * as tar from "tar";
 import * as os from "node:os";
 import * as fs from "node:fs";
 import * as yaml from "yaml";
@@ -103,6 +103,7 @@ export interface FetchOptions {
 
 export async function fetch(opts: FetchOptions) {
     const revisionsDir = Path.join(opts.home, "psm/revisions/schema");
+    fs.mkdirSync(revisionsDir, {recursive:true})
     const revFiles = fs.readdirSync(revisionsDir).filter(n => n.endsWith(".tar.gz"));
 
     const revs: Array<{
