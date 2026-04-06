@@ -40,6 +40,8 @@ export interface FieldOption {
     isUpdatedAt: boolean;
     relationName?: string;
     relationFromFields?: string[];
+    relationOnDelete?: "Cascade"|"NoAction"|"Restrict"|"SetDefault"|"SetNull";
+    relationOnUpdate?: "Cascade"|"NoAction"|"Restrict"|"SetDefault"|"SetNull";
     relationToFields?: string[];
     default?: {
         name: string;
