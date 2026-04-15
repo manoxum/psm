@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as Path from "node:path";
 import chalk from "chalk";
 import {CustomResources, CustomScript, PSMMigrator} from "../driver";
-import {psmLockup} from "./common";
+import {psmLockup, resolveDatabaseUrl} from "./common";
 import { gitAddPath, sanitizeLabel} from "../utils/fs";
 import {PSMConfigFile} from "../configs";
 import * as tar from "tar";
@@ -25,7 +25,6 @@ export type ExecuteCustomOptions = {
 }
 
 export async function execute(opts:CustomOptions ) {
-    require('dotenv').config();
     const moment = require('moment');
 
 
@@ -40,7 +39,7 @@ export async function execute(opts:CustomOptions ) {
         "functions", "triggers", "views"
     ]
     const migrator = driver.migrator({
-        url: process.env[ psm.psm.url ],
+        url: resolveDatabaseUrl(psm.psm.url),
         migrate: "",
         check: "",
         core: ""

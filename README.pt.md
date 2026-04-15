@@ -1,196 +1,108 @@
+# @prisma-psm/core
 
-# PSM - Prisma Safe Migrate
+CLI principal do Prisma Safe Migrate para gerar, validar, empacotar e publicar migrações SQL mais seguras a partir de schemas Prisma.
 
-## Descrição
+Para a documentação bilíngue completa voltada para npm, veja [README.md](./README.md).
 
-**PSM (Prisma Safe Migrate)** é uma ferramenta avançada para geração e aplicação segura de migrações SQL baseadas no modelo Prisma. Seu principal objetivo é garantir que alterações no banco de dados sejam aplicadas sem risco de perda de dados, algo que o sistema padrão de migrações do Prisma não assegura completamente.
+## Visão geral
 
----
+`@prisma-psm/core` é o pacote de orquestração do Prisma Safe Migrate. Ele se integra ao `prisma generate`, coordena a geração de SQL via driver, valida migrações, empacota revisões commitadas e expõe a CLI `psm`.
 
-## Motivação
-
-Migrações de banco de dados são processos críticos que precisam preservar a integridade e os dados existentes. O Prisma fornece um sistema eficiente para migrações, porém sem garantias absolutas contra perda de dados em alterações complexas, como renomear colunas, alterar tipos de dados ou remover tabelas.
-
-O PSM preenche essa lacuna ao criar uma camada extra de validação, controle rigoroso de revisões e aplicação incremental segura em ambientes de produção.
-
----
+Use em conjunto com um driver de banco, como `@prisma-psm/pg`.
 
 ## Instalação
-
-Instale os pacotes do PSM como dependências de desenvolvimento no seu projeto:
 
 ```bash
 npm install --save-dev @prisma-psm/core @prisma-psm/pg
 ```
 
----
-
-## Configuração
-
-No seu arquivo `schema.prisma`, configure o gerador do PSM para gerar os arquivos SQL e conectar ao banco:
+## Configuração no Prisma
 
 ```prisma
 generator psm {
   provider = "psm generate"
-  output   = "./psm/"
+  output   = "./psm"
   driver   = "@prisma-psm/pg"
   url      = env("DATABASE_URL")
+  sys      = "sys"
 }
 ```
 
-- **provider**: gerador do PSM que substitui o padrão do Prisma para geração de migrações.
-- **output**: diretório onde serão gerados os arquivos SQL e artefatos do PSM.
-- **driver**: driver específico para o banco (exemplo: PostgreSQL).
-- **url**: variável de ambiente contendo a string de conexão ao banco.
+## Fluxo principal
 
----
-
-## Como funciona - Fluxo geral
-
-### 1. Geração da migração (`npx prisma generate`)
-
-- Gera os artefatos do Prisma normalmente.
-- Gera dois arquivos principais na pasta `next`:
-    - `migration.next.check.sql`: script para validar se a migração está consistente com o banco atual.
-    - `migration.next.sql`: script que aplicará as alterações.
-- Se `DATABASE_URL` estiver configurada:
-    - Executa automaticamente o script de check.
-    - Se sucesso: mantém os dois arquivos na pasta `next`.
-    - Se falha: mantém só `migration.next.check.sql` e um arquivo de erro, removendo `migration.next.sql` se existir.
-- Se `DATABASE_URL` não estiver definida:
-    - Apenas gera ambos os arquivos, sem validar.
-- Atualiza o arquivo `psm.yml` com informações da migração, como status, driver, URL, esquema, e histórico.
-
-### 2. Aplicação da migração (`psm commit`)
-
-- Valida novamente a migração executando `migration.next.check.sql`.
-- Se validado:
-    - Aplica o `migration.next.sql` no banco.
-    - Gera uma revisão definitiva em `revision/${timestamp}-${label}/` com:
-        - Script da migração aplicada.
-        - Arquivo `psm.yml` atualizado.
-    - Registra no banco a migração aplicada para controle.
-- Se falha, aborta e mostra o erro.
-
-### 3. Deploy em produção (`psm deploy`)
-
-- Aplica todas as revisões pendentes armazenadas na pasta `revision/` de forma incremental.
-- Garante que o banco esteja sempre sincronizado com o histórico de migrações.
-
----
-
-## Motor de migração (engine) detalhado
-
-O PSM usa um esquema shadow temporário para garantir segurança dos dados:
-
-1. Cria um schema temporário `shadow_${random}`.
-2. Cria tabelas temporárias para cada modelo Prisma, sem constraints (ex: `temp_1_user` para o modelo `user`).
-3. Copia os dados das tabelas reais para as temporárias.
-4. Aplica as constraints (chaves, índices, relacionamentos) nas tabelas temporárias.
-5. Se na validação (check) tudo passar:
-    - Remove o schema shadow e as tabelas temporárias.
-6. Se na aplicação (commit next) tudo passar:
-    - Remove as tabelas reais.
-    - Move as tabelas temporárias do schema shadow para o schema final.
-    - Renomeia as tabelas temporárias para os nomes reais.
-    - Remove o schema shadow.
-    - Registra a migração aplicada no banco para controle.
-
-Esse processo impede alterações destrutivas diretas nas tabelas reais antes da validação completa, evitando perda de dados.
-
----
-
-## Estrutura de arquivos gerados
-
-- **next/**
-    - `migration.next.check.sql` — script para validar a migração.
-    - `migration.next.sql` — script para aplicar a migração.
-    - (opcional) arquivo de erro em caso de falha.
-- **revision/${timestamp}-${label}/**
-    - `migration.sql` — script definitivo da migração.
-    - `psm.yml` — metadados e histórico da migração aplicada.
-- **psm.yml**
-    - Arquivo principal com estado, configurações, histórico e resultados das validações.
-
----
-
-## Variável de ambiente
-
-Configure a conexão com seu banco no arquivo `.env` ou no ambiente:
-
-```env
-DATABASE_URL="postgresql://usuario:senha@localhost:5432/seubanco"
-```
-
----
-
-## Comandos principais
-
-| Comando               | Descrição                                                                              |
-|-----------------------|----------------------------------------------------------------------------------------|
-| `npx prisma generate` | Gera os arquivos de migração na pasta `next` e valida (se `DATABASE_URL` configurada). |
-| `psm commit`  | Valida e aplica a próxima migração. Cria revisão definitiva na pasta `revision/`.      |
-| `psm deploy`  | Aplica todas as migrações pendentes da pasta `revision/` na ordem correta.             |
-
----
-
-## Exemplo de uso
+### Gerar
 
 ```bash
-# Gerar migração e validar (se DATABASE_URL definida)
 npx prisma generate
+```
 
-# Validar e aplicar a migração gerada
-psm commit
+Gera:
 
-# Aplicar todas as migrações pendentes em produção
+- `psm/next/migration.next.check.sql`
+- `psm/next/migration.next.sql` quando a validação passa ou é pulada
+- `psm.sql`
+- `psm.yml`
+
+### Commit
+
+```bash
+psm commit --label "add customer status"
+```
+
+O commit:
+
+- roda a validação novamente
+- cria um dump pelo driver ativo
+- adiciona SQL customizado de `psm/functions`, `psm/triggers` e `psm/views`
+- cria um arquivo de revisão em `psm/revisions/schema`
+
+### Deploy
+
+```bash
 psm deploy
 ```
 
----
+O deploy lê os arquivos de revisão já commitados e aplica apenas os que ainda não foram executados.
 
-## Benefícios
+## Outros comandos
 
-- **Garantia contra perda de dados** com validação rigorosa.
-- **Rollback facilitado** e controle de revisões.
-- **Validação automática** durante geração de migrações.
-- **Histórico detalhado** das alterações aplicadas.
-- **Suporte inicial para PostgreSQL**, com possibilidade de expansão.
+```bash
+psm backup --label "before release"
+psm execute --groups functions views
+```
 
----
+## Pastas de SQL customizado
 
-## Roadmap
+```text
+psm/
+  functions/
+  triggers/
+  views/
+```
 
-- Suporte a mais bancos (MySQL, SQLite, etc.).
-- ‘Interface’ gráfica para gestão de migrações.
-- Integração com pipelines CI/CD.
-- Migrações manuais e customizadas.
-- Suporte multi-schema e multi-tenant.
+Esses arquivos são coletados recursivamente e podem ser executados ou empacotados dentro das revisões commitadas.
 
----
+## Anotações `@psm`
 
-## Contribuição
+O PSM interpreta comentários do Prisma como:
 
-Contribuições são bem-vindas! Abra issues para bugs ou sugestões, e envie pull requests para melhorias.
+```prisma
+/// @psm.comment = Managed by PSM
+/// @psm.backup.rev.apply = ALWAYS
+model Customer {
+  id String @id
+}
+```
 
----
+Os formatos suportados incluem flags, atribuições, append em listas, índices e blocos heredoc.
+
+## Requisitos
+
+- Node.js
+- Prisma
+- Driver compatível
+- Para operações com PostgreSQL, `psql` e `pg_dump`
 
 ## Licença
 
-Projeto licenciado sob a [Apache 2.0](./LICENSE).
-
----
-
-## Traduções
-
-[Português](./README.pt.md) | [English](./README.en.md)
-
----
-
-## Contato
-
-Para dúvidas, sugestões ou suporte, abra uma issue ou entre em contato via email.
-
----
-
-**PSM - Migrações seguras e confiáveis para seu banco de dados com Prisma.**
+ISC

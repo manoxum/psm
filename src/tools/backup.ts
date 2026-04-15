@@ -2,10 +2,11 @@
 
 import * as fs from "node:fs";
 import * as Path from "node:path";
+import * as os from "node:os";
 import * as tar from "tar";
 import chalk from "chalk";
 
-import {psmLockup} from "./common";
+import {psmLockup, resolveDatabaseUrl} from "./common";
 import {gitAddPath, sanitizeLabel} from "../utils/fs";
 
 export interface BackupOptions {
@@ -16,12 +17,10 @@ export interface BackupOptions {
 }
 
 export async function backup(opts: BackupOptions) {
-    require('dotenv').config();
-
     const { psm, psm_sql, driver, home, schema } = await psmLockup({ schema: opts.schema });
 
     const migrator = driver.migrator({
-        url: process.env[psm.psm.url],
+        url: resolveDatabaseUrl(psm.psm.url),
         migrate: '',  // Não necessário para backup
         check: '',
         core: fs.readFileSync(psm_sql).toString(),
@@ -39,10 +38,15 @@ export async function backup(opts: BackupOptions) {
     const compressionLevel = opts.level ?? 9; // nível de compressão padrão 9
 
     // Caminho temporário do arquivo
-    const tmpDir = Path.join(home, `psm/backup/tmp-${instant}`);
+    const tmpDir = fs.mkdtempSync(Path.join(os.tmpdir(), `psm-backup-${instant}-`));
     fs.mkdirSync(tmpDir, { recursive: true });
     const backupFile = Path.join(tmpDir, 'backup.sql');
-    fs.writeFileSync(backupFile, dump.output);
+    if (dump.file) {
+        fs.copyFileSync(dump.file, backupFile);
+        fs.rmSync(Path.dirname(dump.file), { recursive: true, force: true });
+    } else {
+        fs.writeFileSync(backupFile, dump.output || "");
+    }
     fs.writeFileSync(Path.join(tmpDir, 'README'), `
         Label   : ${opts.label}
         Level   : ${compressionLevel}
@@ -73,4 +77,3 @@ export async function backup(opts: BackupOptions) {
     // Adiciona o .tar.gz ao git
     if( opts.add )gitAddPath(home || process.cwd(), archiveName);
 }
-

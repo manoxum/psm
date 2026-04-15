@@ -8,7 +8,7 @@ import * as Path from "node:path";
 import { PSMConfigFile } from "../configs";
 import chalk from "chalk";
 import { PSMDriver } from "../driver";
-import { psmLockup } from "./common";
+import { psmLockup, resolveDatabaseUrl } from "./common";
 
 export interface DeployOptions {
     schema?: string;
@@ -19,13 +19,78 @@ export interface DeployOptions {
 
 const TAG = "PSM DEPLOY >";
 
-export async function deploy(opts: DeployOptions) {
-    require('dotenv').config();
+type RevisionEntry = {
+    archive: string;
+    temp: string;
+    extractedDir: string;
+    psm: PSMConfigFile;
+    migrate: string;
+    pulled: boolean;
+    label: string;
+    message: string[];
+    date: Date | null;
+    backup?: string;
+};
 
+async function extractRevisionFiles(archive: string, tempDir: string, files: string[]) {
+    const normalized = new Set(files);
+    await tar.x({
+        file: archive,
+        cwd: tempDir,
+        filter: (pathname) => normalized.has(Path.basename(pathname)),
+    });
+}
+
+function resolveExtractedDir(tempDir: string) {
+    const extractedDir = fs.readdirSync(tempDir)[0];
+    if (!extractedDir) {
+        throw new Error(`Invalid migration archive: ${tempDir}`);
+    }
+    return Path.join(tempDir, extractedDir);
+}
+
+async function loadRevisionArchive(archive: string): Promise<RevisionEntry> {
+    const tempDir = fs.mkdtempSync(Path.join(os.tmpdir(), "psm-"));
+    await extractRevisionFiles(archive, tempDir, ["psm.yml", "migration.sql"]);
+
+    const fullPath = resolveExtractedDir(tempDir);
+    const psmPath = Path.join(fullPath, "psm.yml");
+    const migrationPath = Path.join(fullPath, "migration.sql");
+
+    if (!fs.existsSync(psmPath) || !fs.existsSync(migrationPath)) {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+        throw new Error(`Invalid migration archive: ${Path.basename(archive)}`);
+    }
+
+    return {
+        archive,
+        temp: tempDir,
+        extractedDir: fullPath,
+        psm: yaml.parse(fs.readFileSync(psmPath, "utf-8")) as PSMConfigFile,
+        migrate: fs.readFileSync(migrationPath, "utf-8"),
+        pulled: false,
+        label: "",
+        message: [],
+        date: null,
+    };
+}
+
+async function ensureBackupExtracted(revision: RevisionEntry) {
+    if (revision.backup) return revision.backup;
+    await extractRevisionFiles(revision.archive, revision.temp, ["backup.sql"]);
+    const backup = Path.join(revision.extractedDir, "backup.sql");
+    if (fs.existsSync(backup)) {
+        revision.backup = backup;
+    }
+    return revision.backup;
+}
+
+export async function deploy(opts: DeployOptions) {
     const { psm, psm_sql, driver, home } = await psmLockup({ schema: opts.schema });
+    const currentUrl = resolveDatabaseUrl(psm.psm.url);
 
     let migrator = driver.migrator({
-        url: process.env[psm.psm.url],
+        url: currentUrl,
         migrate: "",
         check: "",
         core: fs.readFileSync(psm_sql).toString(),
@@ -60,11 +125,13 @@ export async function deploy(opts: DeployOptions) {
 
     // Ordena as revisões por instante (cronologicamente)
     revs.sort((a, b) => a.psm.migration.instante.localeCompare(b.psm.migration.instante));
+    let restored = false;
 
     for (let i = 0; i < revs.length; i++) {
         let next = revs[i];
+        const nextUrl = resolveDatabaseUrl(next.psm?.psm?.url, psm.psm.url);
         const migrator = driver.migrator({
-            url: process.env[next.psm.psm.url],
+            url: nextUrl,
             migrate: next.migrate,
             check: "",
             core: "",
@@ -75,8 +142,12 @@ export async function deploy(opts: DeployOptions) {
         if (next.pulled) continue;
 
         // Restaura backup apenas na primeira revisão não aplicada (se houver)
-        if (i === 0 && !!next.backup) {
-            await migrator.restore(next.backup);
+        if (!restored) {
+            const backup = await ensureBackupExtracted(next);
+            if (backup) {
+                await migrator.restore(backup);
+                restored = true;
+            }
         }
 
         const result = await migrator.migrate();
@@ -106,53 +177,10 @@ export async function fetch(opts: FetchOptions) {
     fs.mkdirSync(revisionsDir, {recursive:true})
     const revFiles = fs.readdirSync(revisionsDir).filter(n => n.endsWith(".tar.gz"));
 
-    const revs: Array<{
-        temp: string;
-        psm: PSMConfigFile;
-        migrate: string;
-        backup?: string;
-        pulled: boolean;
-        label: string;
-        message: string[];
-        date: Date | null;
-    }> = [];
+    const revs: RevisionEntry[] = [];
 
     for (const file of revFiles) {
-        const tempDir = fs.mkdtempSync(Path.join(os.tmpdir(), "psm-"));
-
-        await tar.x({
-            file: Path.join(revisionsDir, file),
-            cwd: tempDir,
-        });
-
-        const extractedDir = fs.readdirSync(tempDir)[0];
-        const fullPath = Path.join(tempDir, extractedDir);
-
-        const psmPath = Path.join(fullPath, "psm.yml");
-        const migrationPath = Path.join(fullPath, "migration.sql");
-        const backup = Path.join(fullPath, "backup.sql");
-
-        if (!fs.existsSync(psmPath) || !fs.existsSync(migrationPath)) {
-            fs.rmSync(tempDir, { recursive: true, force: true });
-            throw new Error(`Invalid migration archive: ${file}`);
-        }
-
-        const psm = yaml.parse(fs.readFileSync(psmPath, "utf-8")) as PSMConfigFile;
-        const migrate = fs.readFileSync(migrationPath, "utf-8");
-
-        const rev: typeof revs[number] = {
-            psm,
-            migrate,
-            pulled: false,
-            label: "",
-            message: [],
-            date: null,
-            backup: backup,
-            temp: tempDir,
-        };
-
-        if (fs.existsSync(backup)) rev.backup = backup;
-        revs.push(rev);
+        revs.push(await loadRevisionArchive(Path.join(revisionsDir, file)));
     }
 
     // verificar previews faltantes
@@ -166,20 +194,33 @@ export async function fetch(opts: FetchOptions) {
         return {
             revs,
             error: new Error(`MISSING PREVIEW migration for...\n${missed.join(", ")}`),
-            clean() {},
+            clean() {
+                revs.forEach(value => {
+                    fs.rmSync(value.temp, { recursive: true, force: true });
+                });
+            },
         };
     }
 
     // marcar revisões já migradas
     const migrated = await opts.driver.migrated({
-        url: process.env[opts.psm.psm.url],
+        url: resolveDatabaseUrl(opts.psm.psm.url),
         sys: opts.psm.psm.sys,
+        sids: revs.map((value) => value.psm.psm.migration),
     });
 
     if (!migrated.success) {
         console.error(migrated.error);
         migrated.messages.forEach(console.error);
-        return { revs, error: new Error("Load Migrated failed!") };
+        return {
+            revs,
+            error: new Error("Load Migrated failed!"),
+            clean() {
+                revs.forEach(value => {
+                    fs.rmSync(value.temp, { recursive: true, force: true });
+                });
+            },
+        };
     }
 
     for (const next of revs) {

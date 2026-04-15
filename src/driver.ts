@@ -117,6 +117,7 @@ export interface Migrated {
 export interface PSMMigratedOptions {
     url: string;
     sys: string;
+    sids?: string[];
 }
 
 export interface PSMMigrationResult {
@@ -148,6 +149,7 @@ export interface PSMExecute {
 export interface PSMDumpResponse {
     error?: Error;
     output?: string;
+    file?: string;
 }
 
 export type CustomScript = {

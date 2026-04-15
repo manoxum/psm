@@ -9,9 +9,27 @@ import chalk from "chalk";
 import { PSMConfigFile } from "../configs";
 import * as cp from "node:child_process";
 import { fetch } from "./deploy";
-import { psmLockup } from "./common";
+import { psmLockup, resolveDatabaseUrl } from "./common";
 import { getLatestFolder, gitAddPath, sanitizeLabel } from "../utils/fs";
 import { CreateCustom } from "./execute";
+
+async function readRevisionConfig(archivePath: string): Promise<PSMConfigFile | undefined> {
+    const tempDir = fs.mkdtempSync(Path.join(os.tmpdir(), "psm-preview-"));
+    try {
+        await tar.x({
+            file: archivePath,
+            cwd: tempDir,
+            filter: (pathname) => pathname.endsWith("/psm.yml"),
+        });
+        const extractedItems = fs.readdirSync(tempDir);
+        if (!extractedItems.length) return undefined;
+        const psmYamlPath = Path.join(tempDir, extractedItems[0], "psm.yml");
+        if (!fs.existsSync(psmYamlPath)) return undefined;
+        return yaml.parse(fs.readFileSync(psmYamlPath, "utf-8")) as PSMConfigFile;
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+}
 
 export interface MigrateOptions {
     schema?: string;
@@ -21,7 +39,6 @@ export interface MigrateOptions {
 }
 
 export async function commit(opts: MigrateOptions) {
-    require('dotenv').config();
     const moment = require('moment');
 
     if (opts.generate) {
@@ -43,25 +60,7 @@ export async function commit(opts: MigrateOptions) {
 
     if (lastFile) {
         const tarPath = Path.join(revisionsDir, lastFile);
-        const tempDir = fs.mkdtempSync(Path.join(os.tmpdir(), "psm-preview-"));
-        try {
-            await tar.x({
-                file: tarPath,
-                cwd: tempDir,
-            });
-            const extractedItems = fs.readdirSync(tempDir);
-            if (extractedItems.length > 0) {
-                // Assume que dentro do tar há uma única pasta com o mesmo nome da revisão
-                const extractedDir = Path.join(tempDir, extractedItems[0]);
-                const psmYamlPath = Path.join(extractedDir, "psm.yml");
-                if (fs.existsSync(psmYamlPath)) {
-                    const content = fs.readFileSync(psmYamlPath, "utf-8");
-                    preview = yaml.parse(content) as PSMConfigFile;
-                }
-            }
-        } finally {
-            fs.rmSync(tempDir, { recursive: true, force: true });
-        }
+        preview = await readRevisionConfig(tarPath);
     }
     // ---------------------------------------------------------------------
 
@@ -84,7 +83,7 @@ export async function commit(opts: MigrateOptions) {
     }
 
     const migrator = driver.migrator({
-        url: process.env[psm.psm.url],
+        url: resolveDatabaseUrl(psm.psm.url),
         migrate: fs.readFileSync(next).toString(),
         check: fs.readFileSync(check).toString(),
         core: fs.readFileSync(psm_sql).toString(),
@@ -104,15 +103,18 @@ export async function commit(opts: MigrateOptions) {
         driver: driver,
         home: home,
     });
+    try {
+        if (fetchResponse.error) {
+            throw fetchResponse.error;
+        }
 
-    if (fetchResponse.error) {
-        throw fetchResponse.error;
-    }
+        const noPulled = fetchResponse.revs.filter(n => !n.pulled);
 
-    const noPulled = fetchResponse.revs.filter(n => !n.pulled);
-
-    if (noPulled.length) {
-        throw new Error(`Commit not pulled already exists! Please run ${chalk.bold("psm deploy")} first!`);
+        if (noPulled.length) {
+            throw new Error(`Commit not pulled already exists! Please run ${chalk.bold("psm deploy")} first!`);
+        }
+    } finally {
+        fetchResponse.clean();
     }
 
     result = await migrator.test();
@@ -160,7 +162,12 @@ export async function commit(opts: MigrateOptions) {
 
     fs.writeFileSync(Path.join(nextRev, "migration.sql"), migrator.migrateRaw(custom));
     fs.writeFileSync(Path.join(nextRev, "psm.yml"), yaml.stringify(psm));
-    fs.writeFileSync(Path.join(nextRev, "backup.sql"), dump.output);
+    if (dump.file) {
+        fs.copyFileSync(dump.file, Path.join(nextRev, "backup.sql"));
+        fs.rmSync(Path.dirname(dump.file), { recursive: true, force: true });
+    } else {
+        fs.writeFileSync(Path.join(nextRev, "backup.sql"), dump.output || "");
+    }
 
     fs.unlinkSync(check);
 
