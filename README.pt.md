@@ -2,13 +2,22 @@
 
 CLI principal do Prisma Safe Migrate para gerar, validar, empacotar e publicar migrações SQL mais seguras a partir de schemas Prisma.
 
-Para a documentação bilíngue completa voltada para npm, veja [README.md](./README.md).
+Para a documentação completa, detalhada e bilíngue, veja [README.md](./README.md).
 
-## Visão geral
+## O que esta documentação cobre
 
-`@prisma-psm/core` é o pacote de orquestração do Prisma Safe Migrate. Ele se integra ao `prisma generate`, coordena a geração de SQL via driver, valida migrações, empacota revisões commitadas e expõe a CLI `psm`.
-
-Use em conjunto com um driver de banco, como `@prisma-psm/pg`.
+- arquitetura do `@prisma-psm/core`
+- integração com `prisma generate`
+- estrutura de `psm.yml`, `psm.sql` e `psm.migration.yml`
+- comandos `psm generate`, `check`, `commit`, `deploy`, `backup` e `execute`
+- comandos de autoria de regras versionadas:
+  - `psm rename column`
+  - `psm transform column`
+  - `psm move column`
+  - `psm rls policy`
+- recursos SQL customizados
+- diretivas `@psm.*`
+- casos reais de uso e limitações atuais
 
 ## Instalação
 
@@ -16,7 +25,7 @@ Use em conjunto com um driver de banco, como `@prisma-psm/pg`.
 npm install --save-dev @prisma-psm/core @prisma-psm/pg
 ```
 
-## Configuração no Prisma
+## Configuração básica
 
 ```prisma
 generator psm {
@@ -28,80 +37,31 @@ generator psm {
 }
 ```
 
-## Fluxo principal
-
-### Gerar
+## Fluxo resumido
 
 ```bash
 npx prisma generate
-```
-
-Gera:
-
-- `psm/next/migration.next.check.sql`
-- `psm/next/migration.next.sql` quando a validação passa ou é pulada
-- `psm.sql`
-- `psm.yml`
-
-### Commit
-
-```bash
-psm commit --label "add customer status"
-```
-
-O commit:
-
-- roda a validação novamente
-- cria um dump pelo driver ativo
-- adiciona SQL customizado de `psm/functions`, `psm/triggers` e `psm/views`
-- cria um arquivo de revisão em `psm/revisions/schema`
-
-### Deploy
-
-```bash
+psm commit --label "minha migracao"
 psm deploy
 ```
 
-O deploy lê os arquivos de revisão já commitados e aplica apenas os que ainda não foram executados.
+## Sidecar de migração
 
-## Outros comandos
+Ao lado de `schema.prisma`, o projeto pode manter:
 
-```bash
-psm backup --label "before release"
-psm execute --groups functions views
-```
+- `psm.migration.yml`
+- `psm.migration.yaml`
+- `psm.migration.json`
 
-## Pastas de SQL customizado
+Esse sidecar permite declarar regras específicas por revisão, como:
 
-```text
-psm/
-  functions/
-  triggers/
-  views/
-```
+- `etl.fallback`
+- `rename.columns`
+- `transform.columns`
+- `move.columns`
+- `rls.policies`
 
-Esses arquivos são coletados recursivamente e podem ser executados ou empacotados dentro das revisões commitadas.
-
-## Anotações `@psm`
-
-O PSM interpreta comentários do Prisma como:
-
-```prisma
-/// @psm.comment = Managed by PSM
-/// @psm.backup.rev.apply = ALWAYS
-model Customer {
-  id String @id
-}
-```
-
-Os formatos suportados incluem flags, atribuições, append em listas, índices e blocos heredoc.
-
-## Requisitos
-
-- Node.js
-- Prisma
-- Driver compatível
-- Para operações com PostgreSQL, `psql` e `pg_dump`
+No runtime atual, a família já aplicada automaticamente é `rules.etl.fallback`.
 
 ## Licença
 

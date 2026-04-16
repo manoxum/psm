@@ -8,37 +8,54 @@ Prisma Safe Migrate core CLI for generating, validating, packaging, and deployin
 
 ### What it is
 
-`@prisma-psm/core` is the orchestration layer of Prisma Safe Migrate. It integrates with `prisma generate`, produces migration artifacts, validates them against a live database when available, and exposes a CLI to commit, deploy, back up, and execute custom SQL assets.
+`@prisma-psm/core` is the orchestration layer of Prisma Safe Migrate.
 
-This package does not target a specific database by itself. It works with a driver package such as `@prisma-psm/pg`.
+It sits between Prisma's schema model and the actual SQL executed in the database. Instead of treating a migration as a local developer artifact, PSM turns it into a reviewable, testable, packageable, and deployable asset.
 
-### Why use it
+This package is responsible for:
 
-Prisma migrations are productive, but some schema changes are operationally risky:
+- integrating with `prisma generate`
+- loading a database-specific PSM driver such as `@prisma-psm/pg`
+- generating `check`, `migrate`, and `core` SQL bundles
+- validating migrations against a live database when configured
+- producing and consuming committed revision archives
+- exposing the `psm` CLI
+- loading project-scoped migration sidecars such as `psm.migration.yml`
 
-- Renaming columns or tables
-- Reordering constraints and indexes
-- Refactoring relationships
-- Rebuilding structures in production-like environments
-- Shipping database objects that live outside `schema.prisma`, such as views, triggers, and functions
+This package is not tied to PostgreSQL by itself. Database-specific behavior lives in the driver.
 
-PSM adds a controlled workflow around those changes:
+### Why PSM exists
 
-- Generates a validation script and an apply script
-- Runs a preflight check when a database URL is available
-- Persists revision metadata in `psm.yml`
-- Packages committed revisions as `.tar.gz`
-- Deploys only missing revisions in chronological order
-- Supports custom SQL resources stored alongside the project
+Prisma is productive for application-first schema work, but production-safe migration workflows often need more than a generated SQL diff.
+
+Typical pain points:
+
+- rename operations that look like drop-and-create
+- legacy data that no longer matches the new schema shape
+- objects outside `schema.prisma`, such as views, triggers, and functions
+- need to validate against a real database before committing
+- need to deploy the exact same migration artifact across environments
+- need to capture backups and restore points around risky changes
+
+PSM adds a controlled operational workflow:
+
+- generate a safe preflight script
+- run validation before allowing commit
+- package the migration as a revision archive
+- preserve revision metadata and chain history
+- restore backup state before replaying unapplied revisions
+- keep project-specific migration logic outside the shared driver
 
 ### Package role
 
 Use `@prisma-psm/core` when you need:
 
-- The Prisma generator entrypoint: `provider = "psm generate"`
-- The `psm` CLI
-- Revision packaging and deployment orchestration
-- Shared driver interfaces for custom drivers
+- the Prisma generator entrypoint: `provider = "psm generate"`
+- the `psm` CLI
+- commit/deploy orchestration
+- backup and custom SQL execution helpers
+- the `psm.migration.yml` authoring workflow
+- shared types and contracts for driver development
 
 Use `@prisma-psm/pg` together with it when PostgreSQL is your database.
 
@@ -52,12 +69,12 @@ npm install --save-dev @prisma-psm/core @prisma-psm/pg
 
 - Node.js
 - Prisma in your application
-- A compatible PSM driver, such as `@prisma-psm/pg`
-- For PostgreSQL workflows: `psql` and `pg_dump` available in the environment used by the CLI
+- a PSM-compatible driver, such as `@prisma-psm/pg`
+- for PostgreSQL workflows: `psql` and `pg_dump` available in the execution environment
 
 ### Prisma generator setup
 
-Add a PSM generator to your `schema.prisma`:
+Add the PSM generator to your `schema.prisma`:
 
 ```prisma
 generator client {
@@ -73,17 +90,17 @@ generator psm {
 }
 ```
 
-Configuration notes:
+Meaning of each field:
 
-- `provider`: invokes the PSM generator entrypoint.
-- `output`: folder where PSM writes generated artifacts.
-- `driver`: driver module imported by PSM at runtime.
-- `url`: database URL or environment-backed value used for validation and execution.
-- `sys`: schema used by the migration registry. Defaults to `sys`.
+- `provider`: tells Prisma to execute the PSM generator entrypoint
+- `output`: directory where generated PSM artifacts are written
+- `driver`: runtime driver module, for example `@prisma-psm/pg`
+- `url`: database URL or environment-backed key used during validation and execution
+- `sys`: internal schema used by PSM migration registry tables
 
-### Workflow
+### Core workflow
 
-#### 1. Generate migration artifacts
+#### 1. Generate artifacts
 
 Run:
 
@@ -91,43 +108,49 @@ Run:
 npx prisma generate
 ```
 
-What `@prisma-psm/core` does during generation:
+During generation, `@prisma-psm/core`:
 
-- Reads the Prisma schema and extracts models and indexes
-- Parses `/// @psm.*` directives from model and field documentation
-- Asks the selected driver to generate SQL
-- Writes `next/migration.next.check.sql`
-- Writes `next/migration.next.sql` only when validation is skipped or validation succeeds
-- Writes `psm.sql` with core bootstrap SQL
-- Writes `psm.yml` with migration metadata and validation status
+- parses the Prisma schema
+- extracts models, fields, indexes, and documentation directives
+- loads the selected driver
+- loads project migration metadata from `psm.migration.yml` when present
+- asks the driver to build `core`, `check`, and `migrate` SQL
+- writes the generated output to disk
+- if a database URL is configured, runs a real migration validation pass
 
-If a database URL is available, PSM runs:
+Generated files:
 
-- `core()` first, to prepare internal structures
-- `test()` next, to validate the generated migration
+- `psm/next/migration.next.check.sql`
+- `psm/next/migration.next.sql` when validation succeeds or is skipped
+- `psm.sql`
+- `psm.yml`
 
-If validation fails, `migration.next.sql` is removed so the next step cannot be committed accidentally.
+If validation fails:
 
-#### 2. Commit the next migration
+- `migration.next.sql` is removed
+- the failure messages are printed
+- the migration cannot be committed accidentally
+
+#### 2. Commit the next revision
 
 Run:
 
 ```bash
-psm commit --label "add customer status"
+psm commit --label "rename audit fields"
 ```
 
-Commit behavior:
+Commit flow:
 
-- Loads `psm.yml` and `psm.sql`
-- Validates that `next/migration.next.check.sql` and `next/migration.next.sql` exist
-- Re-runs the driver core/bootstrap step
-- Checks whether there are older revisions not yet deployed
-- Executes the validation SQL again
-- Creates a database dump through the driver
-- Applies the migration, including custom SQL resources when present
-- Writes a revision folder
-- Packs that folder into `psm/revisions/schema/<timestamp> - <label>.tar.gz`
-- Removes transient local files and stages the archive with `git add` when possible
+- loads `psm.yml` and `psm.sql`
+- checks that the generated `next` files exist
+- runs driver bootstrap again
+- ensures there are no older revisions still pending deployment
+- runs validation again against the current database
+- creates a backup through the driver
+- applies the migration plus collected custom SQL
+- writes a temporary revision folder
+- packages it as `psm/revisions/schema/<timestamp> - <label>.tar.gz`
+- stages the final archive in git when possible
 
 #### 3. Deploy committed revisions
 
@@ -137,25 +160,27 @@ Run:
 psm deploy
 ```
 
-Deploy behavior:
+Deploy flow:
 
-- Reads all revision archives from `psm/revisions/schema`
-- Verifies preview/revision chain consistency
-- Queries the driver for already applied migration IDs
-- Applies only missing revisions in chronological order
-- Restores the backup from the first unapplied revision before replaying migrations
+- scans `psm/revisions/schema/*.tar.gz`
+- extracts revision metadata
+- validates preview chain continuity
+- asks the driver which revisions are already applied
+- restores the first pending backup when available
+- applies only missing revisions, in chronological order
 
-This makes deploy deterministic and suitable for environments that consume committed revision archives.
+This means downstream environments replay committed artifacts instead of generating their own migration SQL independently.
 
 ### Directory layout
 
-Typical structure after generation and commit:
+Typical project structure:
 
 ```text
 prisma/
   schema.prisma
-  psm.yml
   psm.sql
+  psm.yml
+  psm.migration.yml
   psm/
     definitions/
     next/
@@ -165,18 +190,123 @@ prisma/
       schema/
         20260415103045 - add customer status.tar.gz
     backup/
+    functions/
+    triggers/
+    views/
 ```
 
-Generated artifacts:
+Meaning of the main files:
 
-- `psm.yml`: current migration metadata and validation result
-- `psm.sql`: core SQL bootstrap used before validation, commit, and deploy
-- `psm/next/migration.next.check.sql`: safe preflight script
-- `psm/next/migration.next.sql`: apply script for the next revision
+- `psm.sql`: bootstrap SQL emitted by the driver
+- `psm.yml`: current generation metadata and validation result
+- `psm.migration.yml`: project-specific, versioned migration rules
+- `psm/next/migration.next.check.sql`: safe validation script
+- `psm/next/migration.next.sql`: candidate apply script
 - `psm/revisions/schema/*.tar.gz`: committed revision archives
-- `psm/backup/*.tar.gz`: manual backups generated by the CLI
+- `psm/backup/*.tar.gz`: manual backup archives
+
+### `psm.yml`
+
+`psm.yml` is generated by PSM and reflects the current state of the generated migration.
+
+It contains:
+
+- generator and driver metadata
+- the current migration token
+- the selected driver id
+- the output path
+- validation result
+- resolved sidecar metadata
+- compiled ETL fallback rules when present
+
+Example:
+
+```yaml
+psm:
+  migration: a1b2c3d4
+  driver: "@prisma-psm/pg"
+  url: DATABASE_URL
+  output: ./prisma/psm
+  schema: ./prisma/schema.prisma
+  sys: sys
+sidecars:
+  migration: psm.migration.yml
+test:
+  check: checked
+  success: true
+  messages: []
+```
+
+### `psm.migration.yml`
+
+`psm.migration.yml` is the project-scoped migration sidecar.
+
+Its purpose is to keep project-specific migration behavior out of the shared driver. Instead of hardcoding special-case fallbacks or transformation assumptions in `@prisma-psm/pg`, each project can declare versioned migration rules next to `schema.prisma`.
+
+Supported sidecar filenames:
+
+- `psm.migration.yml`
+- `psm.migration.yaml`
+- `psm.migration.json`
+
+Current rule families:
+
+- `etl.fallback`
+- `rename.columns`
+- `transform.columns`
+- `move.columns`
+- `rls.policies`
+
+Current runtime support:
+
+- `etl.fallback` is actively consumed during restore/validation flows
+
+Current authoring support:
+
+- the CLI can create versioned rules for all of the families above
+
+Current limitation:
+
+- `rename`, `transform`, `move`, and `rls` are currently registered as project migration metadata, but their SQL materialization is not yet executed by the PostgreSQL driver
+
+Example:
+
+```yaml
+migrations:
+  - revision: portal-legacy-bootstrap
+    description: Legacy field compatibility for portal entities.
+    once: true
+    rules:
+      etl:
+        fallback:
+          models:
+            portal_request:
+              identifier:
+                from: id
+              workflow_status:
+                from: status
+            portal_book:
+              identifier:
+                from: id
+```
 
 ### CLI commands
+
+#### `psm generate`
+
+```bash
+psm generate
+```
+
+Use this when you want to invoke the PSM generator directly instead of going through `npx prisma generate`.
+
+#### `psm check`
+
+```bash
+psm check
+```
+
+This command is currently lightweight and intended as a direct validation helper around generated migration state.
 
 #### `psm commit`
 
@@ -188,10 +318,10 @@ psm commit --generate --generate-command "prisma generate"
 
 Useful flags:
 
-- `--schema`, `-s`: explicit path to `schema.prisma`
-- `--label`, `-l`: human-readable label stored with the revision
-- `--generate`, `-g`: runs the generator before committing
-- `--generate-command`, `-c`: custom command used with `--generate`
+- `--schema`, `-s`: explicit `schema.prisma` path
+- `--label`, `-l`: human-readable label stored with the committed revision
+- `--generate`, `-g`: run generation before committing
+- `--generate-command`, `-c`: override the generate command used with `--generate`
 
 #### `psm deploy`
 
@@ -202,11 +332,9 @@ psm deploy --schema ./prisma/schema.prisma
 
 Useful flags:
 
-- `--schema`, `-s`: explicit path to `schema.prisma`
+- `--schema`, `-s`: explicit `schema.prisma` path
 
 #### `psm backup`
-
-Creates a compressed backup archive from the current database state.
 
 ```bash
 psm backup --label "before hotfix"
@@ -215,13 +343,11 @@ psm backup --add
 
 Useful flags:
 
-- `--schema`, `-s`: explicit path to `schema.prisma`
+- `--schema`, `-s`: explicit `schema.prisma` path
 - `--label`, `-l`: label included in the backup archive name
-- `--add`: stage the resulting archive in git
+- `--add`: stage the generated archive in git
 
 #### `psm execute`
-
-Executes custom SQL groups from the project and optionally saves the executed bundle as a revision archive.
 
 ```bash
 psm execute
@@ -231,8 +357,8 @@ psm execute --groups triggers --label "refresh trigger pack"
 
 Useful flags:
 
-- `--schema`, `-s`: explicit path to `schema.prisma`
-- `--label`, `-l`: label for the saved archive
+- `--schema`, `-s`: explicit `schema.prisma` path
+- `--label`, `-l`: label for the saved execution archive
 - `--groups`, `-g`: one or more groups to execute
 
 Default groups:
@@ -241,9 +367,91 @@ Default groups:
 - `triggers`
 - `views`
 
+#### `psm rename column`
+
+```bash
+psm rename column portal_request old_id identifier
+```
+
+What it does:
+
+- appends a versioned `rename.columns` rule to `psm.migration.yml`
+
+Useful flags:
+
+- `--schema`, `-s`
+- `--revision`, `-r`
+- `--description`, `-d`
+- `--once`
+- `--references preserve|drop`
+
+#### `psm transform column`
+
+```bash
+psm transform column portal_book version int --using "nullif(version, '')::int"
+```
+
+What it does:
+
+- appends a versioned `transform.columns` rule to `psm.migration.yml`
+
+Useful flags:
+
+- `--schema`, `-s`
+- `--revision`, `-r`
+- `--description`, `-d`
+- `--once`
+- `--from`
+- `--using`
+
+#### `psm move column`
+
+```bash
+psm move column portal_book workflow_status --after submitted_at
+psm move column portal_book uid --first
+```
+
+What it does:
+
+- appends a versioned `move.columns` rule to `psm.migration.yml`
+
+Useful flags:
+
+- `--schema`, `-s`
+- `--revision`, `-r`
+- `--description`, `-d`
+- `--once`
+- `--after`
+- `--first`
+
+#### `psm rls policy`
+
+```bash
+psm rls policy portal_book portal_book_owner \
+  --schema_name public \
+  --command SELECT \
+  --using "user_uid = current_setting('app.user_uid')"
+```
+
+What it does:
+
+- appends a versioned `rls.policies` rule to `psm.migration.yml`
+
+Useful flags:
+
+- `--schema`, `-s`
+- `--schema_name`
+- `--revision`, `-r`
+- `--description`, `-d`
+- `--once`
+- `--command`
+- `--to`
+- `--using`
+- `--check`
+
 ### Custom SQL resources
 
-PSM can include SQL files that are not directly represented in Prisma models.
+PSM also versions SQL that Prisma does not model directly.
 
 Supported folders:
 
@@ -254,26 +462,27 @@ prisma/
       audit/
         set_updated_at.sql
     triggers/
-      sync_customer_status.sql
+      audit_user_changes.sql
     views/
       reporting/
-        active_customers.sql
+        customer_summary.sql
 ```
 
-During `psm commit`:
+Behavior:
 
-- files from `functions`, `triggers`, and `views` are collected recursively
-- SQL is appended to the migration
-- compiled SQL files are saved inside the committed revision archive
+- during `psm commit`, these resources are collected recursively and appended to the migration bundle
+- during `psm execute`, selected groups can be executed immediately
+- committed revision archives store the resulting SQL payload
 
-During `psm execute`:
+Real use cases:
 
-- selected groups are executed immediately against the configured database
-- if saved, the executed resources are archived into `psm/revisions/schema`
+- refresh reporting views during a release
+- ship trigger fixes without changing Prisma models
+- keep audit functions versioned with application deploys
 
-### `@psm` documentation directives
+### Prisma documentation directives
 
-`@prisma-psm/core` parses `///` Prisma documentation blocks and reads `@psm.*` annotations. These are later consumed by the driver.
+PSM parses `///` documentation blocks in Prisma schema files and reads `@psm.*` directives.
 
 Supported patterns include:
 
@@ -281,13 +490,7 @@ Supported patterns include:
 - assignment: `@psm.key = value`
 - append to list: `@psm.key += value`
 - indexed assignment: `@psm.key[0] = value`
-- multiline heredoc:
-
-```text
-@psm.query.refresh = <<<SQL
-REFRESH MATERIALIZED VIEW CONCURRENTLY reporting.customer_summary;
-SQL
-```
+- multiline heredoc blocks
 
 Example:
 
@@ -295,81 +498,95 @@ Example:
 /// @psm.comment = Customer table managed by PSM
 /// @psm.backup.rev.apply = ALWAYS
 model Customer {
-  id        String   @id @default(cuid())
-  email     String   @unique
+  id    String @id @default(cuid())
+  email String @unique
 
   /// @psm.comment = Preserve previous values during copy operations
-  name      String
+  name  String
 }
 ```
 
-Exact support depends on the selected driver. In the PostgreSQL driver, these annotations are used while building the migration plan.
+Exact behavior depends on the driver, but the PostgreSQL driver already uses these directives while building the migration plan.
 
-### Practical use cases
+### Real-world scenarios
 
-#### Use case 1: safer schema evolution in a shared database
+#### Scenario 1: deploy the same migration artifact across environments
 
-Team flow:
+Context:
 
-1. Update `schema.prisma`
-2. Run `npx prisma generate`
-3. Review `psm/next/migration.next.check.sql`
-4. Run `psm commit --label "customer status"`
-5. Commit the generated revision archive
-6. Run `psm deploy` in the target environment
+- a team wants development, staging, and production to use the exact same SQL payload
 
-This is useful when application code and database changes must move together with a traceable revision artifact.
+Workflow:
 
-#### Use case 2: shipping SQL objects with application releases
+1. update `schema.prisma`
+2. run `npx prisma generate`
+3. inspect `psm/next/migration.next.check.sql`
+4. run `psm commit --label "customer status"`
+5. commit the resulting `.tar.gz`
+6. run `psm deploy` downstream
 
-Store SQL assets in:
+Why PSM helps:
 
-- `psm/functions`
-- `psm/triggers`
-- `psm/views`
+- staging and production do not regenerate the migration independently
+- the revision archive becomes the source of truth
 
-Then commit or execute them through PSM so that the release contains both schema and database-object changes.
+#### Scenario 2: migrate legacy identifiers into a new normalized schema
 
-#### Use case 3: controlled production rollout
+Context:
 
-Instead of letting each environment generate migrations independently, generate once, commit once, then deploy committed archives everywhere else. That reduces drift and makes promotion more predictable.
+- a table previously used a text `id` like `REQ-2026-006`
+- the new schema introduces `id int` plus `identifier varchar`
 
-### End-to-end example
+Workflow:
 
-```bash
-# 1. Update your Prisma models
+1. add the new fields in Prisma
+2. declare ETL fallback rules in `psm.migration.yml`
+3. run `npx prisma generate`
+4. let validation test the restore path before commit
 
-# 2. Generate PSM artifacts
-npx prisma generate
+Why PSM helps:
 
-# 3. Inspect generated SQL
-ls prisma/psm/next
+- fallback logic stays in project metadata
+- the shared driver remains generic
 
-# 4. Commit the next revision
-psm commit --schema ./prisma/schema.prisma --label "add customer status"
+#### Scenario 3: release database objects that Prisma does not model
 
-# 5. Deploy pending revisions
-psm deploy --schema ./prisma/schema.prisma
-```
+Context:
+
+- the release includes a reporting view and an audit trigger
+
+Workflow:
+
+1. place SQL files under `psm/views` and `psm/triggers`
+2. run `psm execute --groups views triggers --label "reporting pack"`
+3. or include them in the next normal `psm commit`
+
+Why PSM helps:
+
+- database objects and schema work can travel together
 
 ### Driver development
 
-This package exports the driver interfaces used by database-specific implementations:
+`@prisma-psm/core` also exports the contracts used by drivers.
+
+Important interfaces and types include:
 
 - `PSMDriver`
 - `PSMGenerator`
 - `PSMMigrator`
 - `PSMParserOptions`
-- model, field, and migration-related types
+- model and field metadata types
+- project migration rule types
 
-If you plan to support another database engine, `@prisma-psm/core` is the contract package you build against.
+If you want to support another database engine, this package is the contract and orchestration layer you build against.
 
 ### Operational notes
 
-- The CLI searches for `schema.prisma` in the current directory and in `./prisma/schema.prisma` when `--schema` is not provided.
-- Environment variables are loaded from the process environment and from `<schema-dir>/.env`.
-- Revision archives are the source of truth for `psm deploy`.
-- Backup and restore behavior is implemented by the selected driver.
+- when `--schema` is not provided, PSM looks for `schema.prisma` in the current directory and in `./prisma/schema.prisma`
+- environment variables are resolved from process env and from the Prisma schema directory environment setup
+- revision archives are the deploy source of truth
+- driver-specific backup and restore behavior is delegated to the active driver
+- local monorepo development supports loading a local driver implementation when the package name starts with `@prisma-psm/`
 
 ### License
 
@@ -379,39 +596,56 @@ ISC
 
 ### O que é
 
-`@prisma-psm/core` é a camada de orquestração do Prisma Safe Migrate. Ele se integra ao `prisma generate`, produz artefatos de migração, valida esses artefatos contra um banco real quando disponível e expõe uma CLI para commit, deploy, backup e execução de SQL customizado.
+`@prisma-psm/core` é a camada de orquestração do Prisma Safe Migrate.
 
-Este pacote não é específico de banco por si só. Ele trabalha com um driver, como `@prisma-psm/pg`.
+Ele fica entre o modelo Prisma e o SQL efetivamente executado no banco. Em vez de tratar a migração como um artefato local de desenvolvimento, o PSM transforma a migração em um ativo revisável, testável, empacotável e publicável.
 
-### Por que usar
+Este pacote é responsável por:
 
-As migrações do Prisma são produtivas, mas algumas mudanças de schema são operacionalmente arriscadas:
+- integrar com `prisma generate`
+- carregar um driver específico de banco, como `@prisma-psm/pg`
+- gerar bundles SQL de `core`, `check` e `migrate`
+- validar migrações contra um banco real quando configurado
+- produzir e consumir arquivos de revisão commitados
+- expor a CLI `psm`
+- carregar sidecars de migração do projeto, como `psm.migration.yml`
 
-- Renomear colunas ou tabelas
-- Reordenar constraints e índices
-- Refatorar relacionamentos
-- Recriar estruturas em ambientes próximos de produção
-- Publicar objetos de banco fora do `schema.prisma`, como views, triggers e functions
+Este pacote não é preso a PostgreSQL por si só. O comportamento específico do banco fica no driver.
 
-O PSM adiciona um fluxo mais controlado em torno dessas mudanças:
+### Por que o PSM existe
 
-- Gera um script de validação e um script de aplicação
-- Executa um preflight check quando existe URL de banco
-- Persiste metadados de revisão em `psm.yml`
-- Empacota revisões commitadas em `.tar.gz`
-- Faz deploy apenas das revisões ausentes em ordem cronológica
-- Suporta recursos SQL customizados armazenados junto ao projeto
+Prisma é produtivo para trabalho de schema orientado à aplicação, mas fluxos seguros de migração em produção normalmente exigem mais do que um diff SQL gerado.
+
+Problemas típicos:
+
+- renames que parecem drop-and-create
+- dados legados que não combinam mais com o novo formato do schema
+- objetos fora do `schema.prisma`, como views, triggers e functions
+- necessidade de validar contra um banco real antes do commit
+- necessidade de publicar exatamente o mesmo artefato de migração entre ambientes
+- necessidade de capturar backups e pontos de restauração em mudanças arriscadas
+
+O PSM adiciona um fluxo operacional mais controlado:
+
+- gera um script de preflight seguro
+- roda validação antes de permitir commit
+- empacota a migração como arquivo de revisão
+- preserva metadados e encadeamento das revisões
+- restaura o estado de backup antes de reaplicar revisões pendentes
+- mantém a lógica específica do projeto fora do driver compartilhado
 
 ### Papel do pacote
 
 Use `@prisma-psm/core` quando você precisa de:
 
-- Entry point do generator Prisma: `provider = "psm generate"`
+- entrypoint do generator Prisma: `provider = "psm generate"`
 - CLI `psm`
-- Orquestração de empacotamento e deploy de revisões
-- Interfaces compartilhadas para criação de drivers
+- orquestração de commit e deploy
+- helpers de backup e execução de SQL customizado
+- workflow de autoria de `psm.migration.yml`
+- tipos e contratos compartilhados para desenvolvimento de drivers
 
-Use junto com `@prisma-psm/pg` quando seu banco for PostgreSQL.
+Use junto com `@prisma-psm/pg` quando o banco for PostgreSQL.
 
 ### Instalação
 
@@ -423,12 +657,12 @@ npm install --save-dev @prisma-psm/core @prisma-psm/pg
 
 - Node.js
 - Prisma na aplicação
-- Um driver PSM compatível, como `@prisma-psm/pg`
-- Para workflows com PostgreSQL: `psql` e `pg_dump` disponíveis no ambiente onde a CLI será executada
+- um driver compatível com PSM, como `@prisma-psm/pg`
+- para fluxos PostgreSQL: `psql` e `pg_dump` disponíveis no ambiente de execução
 
-### Configuração do generator
+### Configuração do generator Prisma
 
-Adicione um generator PSM ao seu `schema.prisma`:
+Adicione o generator PSM no `schema.prisma`:
 
 ```prisma
 generator client {
@@ -444,17 +678,17 @@ generator psm {
 }
 ```
 
-Observações de configuração:
+Significado de cada campo:
 
-- `provider`: aciona o generator do PSM.
-- `output`: pasta onde o PSM grava os artefatos.
-- `driver`: módulo do driver importado em tempo de execução.
-- `url`: URL do banco ou valor baseado em variável de ambiente usado para validação e execução.
-- `sys`: schema usado pelo registro interno de migrações. O padrão é `sys`.
+- `provider`: informa ao Prisma que deve executar o entrypoint do PSM
+- `output`: diretório onde os artefatos PSM serão escritos
+- `driver`: módulo do driver em runtime, por exemplo `@prisma-psm/pg`
+- `url`: URL do banco ou chave de ambiente usada durante validação e execução
+- `sys`: schema interno usado pelas tabelas de registro do PSM
 
-### Fluxo
+### Fluxo principal
 
-#### 1. Gerar artefatos de migração
+#### 1. Gerar artefatos
 
 Execute:
 
@@ -462,43 +696,49 @@ Execute:
 npx prisma generate
 ```
 
-O que o `@prisma-psm/core` faz durante a geração:
+Durante a geração, o `@prisma-psm/core`:
 
-- Lê o schema Prisma e extrai models e indexes
-- Faz o parse das diretivas `/// @psm.*` em documentações de models e fields
-- Pede ao driver selecionado para gerar SQL
-- Grava `next/migration.next.check.sql`
-- Grava `next/migration.next.sql` apenas quando a validação é pulada ou bem-sucedida
-- Grava `psm.sql` com o SQL base de bootstrap
-- Grava `psm.yml` com metadados da migração e status da validação
+- faz parse do schema Prisma
+- extrai models, fields, indexes e diretivas de documentação
+- carrega o driver selecionado
+- carrega metadados de migração do projeto a partir de `psm.migration.yml`, quando existir
+- pede ao driver para construir os SQLs `core`, `check` e `migrate`
+- grava a saída em disco
+- se houver URL de banco configurada, executa uma validação real da migração
 
-Se houver URL de banco disponível, o PSM executa:
+Arquivos gerados:
 
-- `core()` primeiro, para preparar estruturas internas
-- `test()` depois, para validar a migração gerada
+- `psm/next/migration.next.check.sql`
+- `psm/next/migration.next.sql` quando a validação passa ou é pulada
+- `psm.sql`
+- `psm.yml`
 
-Se a validação falhar, `migration.next.sql` é removido para evitar commit acidental.
+Se a validação falhar:
 
-#### 2. Comitar a próxima migração
+- `migration.next.sql` é removido
+- as mensagens de erro são impressas
+- a migração não pode ser commitada por acidente
+
+#### 2. Comitar a próxima revisão
 
 Execute:
 
 ```bash
-psm commit --label "add customer status"
+psm commit --label "rename audit fields"
 ```
 
-Comportamento do commit:
+Fluxo do commit:
 
-- Carrega `psm.yml` e `psm.sql`
-- Valida que `next/migration.next.check.sql` e `next/migration.next.sql` existem
-- Executa novamente a etapa core/bootstrap do driver
-- Verifica se existem revisões anteriores ainda não aplicadas
-- Executa novamente o SQL de validação
-- Cria um dump do banco através do driver
-- Aplica a migração, incluindo recursos SQL customizados quando existirem
-- Escreve uma pasta de revisão
-- Compacta essa pasta em `psm/revisions/schema/<timestamp> - <label>.tar.gz`
-- Remove arquivos transitórios e faz `git add` do arquivo quando possível
+- carrega `psm.yml` e `psm.sql`
+- verifica que os arquivos `next` existem
+- executa novamente o bootstrap do driver
+- garante que não existam revisões antigas ainda pendentes
+- roda a validação novamente contra o banco atual
+- cria um backup através do driver
+- aplica a migração mais o SQL customizado coletado
+- grava uma pasta temporária de revisão
+- compacta essa pasta em `psm/revisions/schema/<timestamp> - <label>.tar.gz`
+- faz stage do arquivo final no git quando possível
 
 #### 3. Fazer deploy das revisões commitadas
 
@@ -508,25 +748,27 @@ Execute:
 psm deploy
 ```
 
-Comportamento do deploy:
+Fluxo do deploy:
 
-- Lê todos os arquivos de revisão em `psm/revisions/schema`
-- Verifica consistência da cadeia preview/revision
-- Consulta no driver quais migrações já foram aplicadas
-- Aplica apenas as revisões ausentes em ordem cronológica
-- Restaura o backup da primeira revisão pendente antes de reaplicar as migrações
+- varre `psm/revisions/schema/*.tar.gz`
+- extrai os metadados das revisões
+- valida a continuidade da cadeia de preview
+- pergunta ao driver quais revisões já foram aplicadas
+- restaura o primeiro backup pendente, quando existir
+- aplica apenas as revisões ausentes, em ordem cronológica
 
-Isso torna o deploy determinístico e adequado para ambientes que consomem arquivos de revisão commitados.
+Isso faz com que ambientes downstream reproduzam artefatos commitados em vez de gerarem seu próprio SQL independentemente.
 
 ### Estrutura de diretórios
 
-Estrutura típica após geração e commit:
+Estrutura típica do projeto:
 
 ```text
 prisma/
   schema.prisma
-  psm.yml
   psm.sql
+  psm.yml
+  psm.migration.yml
   psm/
     definitions/
     next/
@@ -536,18 +778,123 @@ prisma/
       schema/
         20260415103045 - add customer status.tar.gz
     backup/
+    functions/
+    triggers/
+    views/
 ```
 
-Artefatos gerados:
+Significado dos principais arquivos:
 
-- `psm.yml`: metadados da migração atual e resultado da validação
-- `psm.sql`: SQL base usado antes de validar, comitar e fazer deploy
-- `psm/next/migration.next.check.sql`: script seguro de preflight
-- `psm/next/migration.next.sql`: script de aplicação da próxima revisão
+- `psm.sql`: SQL de bootstrap emitido pelo driver
+- `psm.yml`: metadados da geração atual e resultado da validação
+- `psm.migration.yml`: regras versionadas e específicas do projeto
+- `psm/next/migration.next.check.sql`: script seguro de validação
+- `psm/next/migration.next.sql`: script candidato de aplicação
 - `psm/revisions/schema/*.tar.gz`: arquivos de revisão commitados
-- `psm/backup/*.tar.gz`: backups manuais gerados pela CLI
+- `psm/backup/*.tar.gz`: arquivos de backup manual
+
+### `psm.yml`
+
+`psm.yml` é gerado pelo PSM e reflete o estado atual da migração gerada.
+
+Ele contém:
+
+- metadados do generator e do driver
+- token atual de migração
+- id do driver selecionado
+- caminho de saída
+- resultado da validação
+- metadados do sidecar resolvido
+- regras ETL compiladas, quando existirem
+
+Exemplo:
+
+```yaml
+psm:
+  migration: a1b2c3d4
+  driver: "@prisma-psm/pg"
+  url: DATABASE_URL
+  output: ./prisma/psm
+  schema: ./prisma/schema.prisma
+  sys: sys
+sidecars:
+  migration: psm.migration.yml
+test:
+  check: checked
+  success: true
+  messages: []
+```
+
+### `psm.migration.yml`
+
+`psm.migration.yml` é o sidecar de migração do projeto.
+
+O objetivo dele é manter comportamento específico de cada projeto fora do driver compartilhado. Em vez de codificar fallbacks especiais ou suposições de transformação diretamente em `@prisma-psm/pg`, cada projeto pode declarar regras versionadas ao lado de `schema.prisma`.
+
+Nomes suportados:
+
+- `psm.migration.yml`
+- `psm.migration.yaml`
+- `psm.migration.json`
+
+Famílias de regra atuais:
+
+- `etl.fallback`
+- `rename.columns`
+- `transform.columns`
+- `move.columns`
+- `rls.policies`
+
+Suporte atual em runtime:
+
+- `etl.fallback` já é consumido ativamente durante restore/validação
+
+Suporte atual de autoria:
+
+- a CLI já consegue criar regras versionadas para todas as famílias acima
+
+Limitação atual:
+
+- `rename`, `transform`, `move` e `rls` hoje são registrados como metadata versionada do projeto, mas sua materialização SQL ainda não é executada pelo driver PostgreSQL
+
+Exemplo:
+
+```yaml
+migrations:
+  - revision: portal-legacy-bootstrap
+    description: Compatibilidade de campos legados para entidades do portal.
+    once: true
+    rules:
+      etl:
+        fallback:
+          models:
+            portal_request:
+              identifier:
+                from: id
+              workflow_status:
+                from: status
+            portal_book:
+              identifier:
+                from: id
+```
 
 ### Comandos da CLI
+
+#### `psm generate`
+
+```bash
+psm generate
+```
+
+Use quando quiser invocar o generator do PSM diretamente, sem passar por `npx prisma generate`.
+
+#### `psm check`
+
+```bash
+psm check
+```
+
+Esse comando hoje é um helper leve voltado à validação direta do estado gerado.
 
 #### `psm commit`
 
@@ -559,10 +906,10 @@ psm commit --generate --generate-command "prisma generate"
 
 Flags úteis:
 
-- `--schema`, `-s`: caminho explícito para o `schema.prisma`
-- `--label`, `-l`: rótulo legível armazenado com a revisão
-- `--generate`, `-g`: executa o generator antes do commit
-- `--generate-command`, `-c`: comando customizado usado com `--generate`
+- `--schema`, `-s`: caminho explícito para `schema.prisma`
+- `--label`, `-l`: rótulo legível armazenado com a revisão commitada
+- `--generate`, `-g`: executa geração antes do commit
+- `--generate-command`, `-c`: sobrescreve o comando de geração usado com `--generate`
 
 #### `psm deploy`
 
@@ -573,11 +920,9 @@ psm deploy --schema ./prisma/schema.prisma
 
 Flags úteis:
 
-- `--schema`, `-s`: caminho explícito para o `schema.prisma`
+- `--schema`, `-s`: caminho explícito para `schema.prisma`
 
 #### `psm backup`
-
-Cria um arquivo compactado de backup a partir do estado atual do banco.
 
 ```bash
 psm backup --label "before hotfix"
@@ -586,13 +931,11 @@ psm backup --add
 
 Flags úteis:
 
-- `--schema`, `-s`: caminho explícito para o `schema.prisma`
-- `--label`, `-l`: rótulo incluído no nome do arquivo de backup
+- `--schema`, `-s`: caminho explícito para `schema.prisma`
+- `--label`, `-l`: rótulo incluído no nome do backup
 - `--add`: faz stage do arquivo gerado no git
 
 #### `psm execute`
-
-Executa grupos de SQL customizado do projeto e, opcionalmente, salva o bundle executado como arquivo de revisão.
 
 ```bash
 psm execute
@@ -602,9 +945,9 @@ psm execute --groups triggers --label "refresh trigger pack"
 
 Flags úteis:
 
-- `--schema`, `-s`: caminho explícito para o `schema.prisma`
+- `--schema`, `-s`: caminho explícito para `schema.prisma`
 - `--label`, `-l`: rótulo para o arquivo salvo
-- `--groups`, `-g`: um ou mais grupos para executar
+- `--groups`, `-g`: um ou mais grupos a executar
 
 Grupos padrão:
 
@@ -612,9 +955,91 @@ Grupos padrão:
 - `triggers`
 - `views`
 
+#### `psm rename column`
+
+```bash
+psm rename column portal_request old_id identifier
+```
+
+O que faz:
+
+- adiciona uma regra versionada `rename.columns` em `psm.migration.yml`
+
+Flags úteis:
+
+- `--schema`, `-s`
+- `--revision`, `-r`
+- `--description`, `-d`
+- `--once`
+- `--references preserve|drop`
+
+#### `psm transform column`
+
+```bash
+psm transform column portal_book version int --using "nullif(version, '')::int"
+```
+
+O que faz:
+
+- adiciona uma regra versionada `transform.columns` em `psm.migration.yml`
+
+Flags úteis:
+
+- `--schema`, `-s`
+- `--revision`, `-r`
+- `--description`, `-d`
+- `--once`
+- `--from`
+- `--using`
+
+#### `psm move column`
+
+```bash
+psm move column portal_book workflow_status --after submitted_at
+psm move column portal_book uid --first
+```
+
+O que faz:
+
+- adiciona uma regra versionada `move.columns` em `psm.migration.yml`
+
+Flags úteis:
+
+- `--schema`, `-s`
+- `--revision`, `-r`
+- `--description`, `-d`
+- `--once`
+- `--after`
+- `--first`
+
+#### `psm rls policy`
+
+```bash
+psm rls policy portal_book portal_book_owner \
+  --schema_name public \
+  --command SELECT \
+  --using "user_uid = current_setting('app.user_uid')"
+```
+
+O que faz:
+
+- adiciona uma regra versionada `rls.policies` em `psm.migration.yml`
+
+Flags úteis:
+
+- `--schema`, `-s`
+- `--schema_name`
+- `--revision`, `-r`
+- `--description`, `-d`
+- `--once`
+- `--command`
+- `--to`
+- `--using`
+- `--check`
+
 ### Recursos SQL customizados
 
-O PSM consegue incluir arquivos SQL que não estão representados diretamente nos models Prisma.
+O PSM também versiona SQL que o Prisma não modela diretamente.
 
 Pastas suportadas:
 
@@ -625,40 +1050,35 @@ prisma/
       audit/
         set_updated_at.sql
     triggers/
-      sync_customer_status.sql
+      audit_user_changes.sql
     views/
       reporting/
-        active_customers.sql
+        customer_summary.sql
 ```
 
-Durante `psm commit`:
+Comportamento:
 
-- arquivos de `functions`, `triggers` e `views` são coletados recursivamente
-- o SQL é anexado à migração
-- os arquivos SQL compilados são salvos dentro do arquivo de revisão
+- durante `psm commit`, esses recursos são coletados recursivamente e anexados ao bundle da migração
+- durante `psm execute`, grupos selecionados podem ser executados imediatamente
+- os arquivos de revisão commitados armazenam o payload SQL resultante
 
-Durante `psm execute`:
+Casos reais:
 
-- os grupos selecionados são executados imediatamente no banco configurado
-- se forem salvos, os recursos executados são arquivados em `psm/revisions/schema`
+- atualizar views de reporting durante uma release
+- publicar correções de trigger sem alterar models Prisma
+- manter funções de auditoria versionadas junto do deploy da aplicação
 
-### Diretivas de documentação `@psm`
+### Diretivas de documentação Prisma
 
-`@prisma-psm/core` faz parse dos blocos de documentação `///` do Prisma e lê anotações `@psm.*`. Depois, essas anotações são consumidas pelo driver.
+O PSM faz parse de blocos `///` no schema Prisma e lê diretivas `@psm.*`.
 
 Padrões suportados:
 
 - flags booleanas: `@psm.some.flag`
 - atribuição: `@psm.key = value`
 - append em lista: `@psm.key += value`
-- atribuição com índice: `@psm.key[0] = value`
-- heredoc multiline:
-
-```text
-@psm.query.refresh = <<<SQL
-REFRESH MATERIALIZED VIEW CONCURRENTLY reporting.customer_summary;
-SQL
-```
+- atribuição indexada: `@psm.key[0] = value`
+- blocos heredoc multiline
 
 Exemplo:
 
@@ -666,81 +1086,95 @@ Exemplo:
 /// @psm.comment = Customer table managed by PSM
 /// @psm.backup.rev.apply = ALWAYS
 model Customer {
-  id        String   @id @default(cuid())
-  email     String   @unique
+  id    String @id @default(cuid())
+  email String @unique
 
   /// @psm.comment = Preserve previous values during copy operations
-  name      String
+  name  String
 }
 ```
 
-O suporte exato depende do driver selecionado. No driver PostgreSQL, essas anotações são usadas durante a montagem do plano de migração.
+O comportamento exato depende do driver, mas o driver PostgreSQL já usa essas diretivas ao montar o plano de migração.
 
-### Casos de uso práticos
+### Cenários reais
 
-#### Caso de uso 1: evolução mais segura do schema em banco compartilhado
+#### Cenário 1: publicar o mesmo artefato de migração em todos os ambientes
 
-Fluxo do time:
+Contexto:
 
-1. Atualize o `schema.prisma`
-2. Execute `npx prisma generate`
-3. Revise `psm/next/migration.next.check.sql`
-4. Execute `psm commit --label "customer status"`
-5. Faça commit do arquivo de revisão gerado
-6. Execute `psm deploy` no ambiente alvo
+- o time quer que desenvolvimento, homologação e produção usem exatamente o mesmo payload SQL
 
-Isso é útil quando código da aplicação e mudança de banco precisam andar juntos com um artefato rastreável.
+Fluxo:
 
-#### Caso de uso 2: publicar objetos SQL junto com releases da aplicação
+1. atualizar `schema.prisma`
+2. executar `npx prisma generate`
+3. revisar `psm/next/migration.next.check.sql`
+4. executar `psm commit --label "customer status"`
+5. commitar o `.tar.gz` resultante
+6. executar `psm deploy` nos ambientes downstream
 
-Guarde assets SQL em:
+Por que o PSM ajuda:
 
-- `psm/functions`
-- `psm/triggers`
-- `psm/views`
+- staging e produção não regeneram a migração de forma independente
+- o arquivo de revisão vira a fonte de verdade
 
-Depois, use o PSM para comitar ou executar esses arquivos junto da mudança de schema e do release.
+#### Cenário 2: migrar identificadores legados para um schema normalizado
 
-#### Caso de uso 3: rollout controlado em produção
+Contexto:
 
-Em vez de cada ambiente gerar sua própria migração, gere uma vez, faça commit uma vez e depois faça deploy dos arquivos commitados nos demais ambientes. Isso reduz drift e torna a promoção entre ambientes mais previsível.
+- uma tabela antiga usava um `id` textual como `REQ-2026-006`
+- o novo schema introduz `id int` e `identifier varchar`
 
-### Exemplo ponta a ponta
+Fluxo:
 
-```bash
-# 1. Atualize seus models Prisma
+1. adicionar os novos campos no Prisma
+2. declarar regras ETL em `psm.migration.yml`
+3. executar `npx prisma generate`
+4. deixar a validação testar o caminho de restore antes do commit
 
-# 2. Gere artefatos PSM
-npx prisma generate
+Por que o PSM ajuda:
 
-# 3. Inspecione o SQL gerado
-ls prisma/psm/next
+- a lógica de fallback fica no metadata do projeto
+- o driver compartilhado continua genérico
 
-# 4. Comite a próxima revisão
-psm commit --schema ./prisma/schema.prisma --label "add customer status"
+#### Cenário 3: publicar objetos de banco que o Prisma não modela
 
-# 5. Faça deploy das revisões pendentes
-psm deploy --schema ./prisma/schema.prisma
-```
+Contexto:
+
+- a release inclui uma view de reporting e um trigger de auditoria
+
+Fluxo:
+
+1. colocar os arquivos SQL em `psm/views` e `psm/triggers`
+2. executar `psm execute --groups views triggers --label "reporting pack"`
+3. ou incluir esses recursos no próximo `psm commit` normal
+
+Por que o PSM ajuda:
+
+- objetos de banco e mudanças de schema podem viajar juntos
 
 ### Desenvolvimento de drivers
 
-Este pacote exporta as interfaces usadas por implementações específicas de banco:
+`@prisma-psm/core` também exporta os contratos usados por drivers.
+
+Interfaces e tipos importantes:
 
 - `PSMDriver`
 - `PSMGenerator`
 - `PSMMigrator`
 - `PSMParserOptions`
-- tipos relacionados a model, field e migração
+- tipos de model e field
+- tipos de regras de migração do projeto
 
-Se você pretende suportar outro engine de banco, `@prisma-psm/core` é o pacote de contrato.
+Se você quiser suportar outro engine de banco, este pacote é a camada de contrato e orquestração sobre a qual o driver deve ser construído.
 
 ### Notas operacionais
 
-- A CLI procura `schema.prisma` no diretório atual e em `./prisma/schema.prisma` quando `--schema` não é informado.
-- Variáveis de ambiente são carregadas do ambiente do processo e também de `<schema-dir>/.env`.
-- Os arquivos de revisão são a fonte de verdade para `psm deploy`.
-- O comportamento de backup e restore é implementado pelo driver selecionado.
+- quando `--schema` não é informado, o PSM procura `schema.prisma` no diretório atual e em `./prisma/schema.prisma`
+- variáveis de ambiente são resolvidas a partir do ambiente do processo e da configuração associada ao diretório do schema Prisma
+- os arquivos de revisão são a fonte de verdade do deploy
+- backup e restore específicos de banco são delegados ao driver ativo
+- no desenvolvimento local em monorepo, o carregamento de driver suporta resolver implementações locais quando o pacote começa com `@prisma-psm/`
 
 ### Licença
 

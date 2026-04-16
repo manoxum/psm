@@ -1,26 +1,20 @@
-// filename: src/driver.ts
-
 export interface PSMField {
     comment?: string;
     restore?: {
         expression?: string;
     };
 }
-
 export interface PSMMigrationFallbackFieldRule {
     from: string | string[];
 }
-
 export interface PSMMigrationFallbackModelRules {
     [field: string]: PSMMigrationFallbackFieldRule;
 }
-
 export interface PSMMigrationFallbackRules {
     models?: {
         [model: string]: PSMMigrationFallbackModelRules;
     };
 }
-
 export interface PSMMigrationRevisionRuleSet {
     etl?: {
         fallback?: PSMMigrationFallbackRules;
@@ -62,24 +56,20 @@ export interface PSMMigrationRevisionRuleSet {
         }>;
     };
 }
-
 export interface PSMProjectMigrationRevision {
     revision: string;
     description?: string;
     once?: boolean;
     rules?: PSMMigrationRevisionRuleSet;
 }
-
 export interface PSMProjectMigrationFile {
     migrations?: PSMProjectMigrationRevision[];
 }
-
 export interface UniqueOptions {
     name: string;
     fields: string[];
     indexes: [];
 }
-
 export interface IndexOptions {
     model: string;
     type: "id" | "unique" | "normal";
@@ -87,9 +77,10 @@ export interface IndexOptions {
     dbName?: string;
     isDefinedOnField?: boolean;
     algorithm: string;
-    fields: ({ name: string })[];
+    fields: ({
+        name: string;
+    })[];
 }
-
 export interface FieldOption {
     name: string;
     documentation?: string;
@@ -107,8 +98,8 @@ export interface FieldOption {
     isUpdatedAt: boolean;
     relationName?: string;
     relationFromFields?: string[];
-    relationOnDelete?: "Cascade"|"NoAction"|"Restrict"|"SetDefault"|"SetNull";
-    relationOnUpdate?: "Cascade"|"NoAction"|"Restrict"|"SetDefault"|"SetNull";
+    relationOnDelete?: "Cascade" | "NoAction" | "Restrict" | "SetDefault" | "SetNull";
+    relationOnUpdate?: "Cascade" | "NoAction" | "Restrict" | "SetDefault" | "SetNull";
     relationToFields?: string[];
     default?: {
         name: string;
@@ -116,7 +107,6 @@ export interface FieldOption {
     };
     nativeType?: [string, [string]];
 }
-
 export interface PSMParserOptions {
     models: ModelOptions[];
     indexes: IndexOptions[];
@@ -126,7 +116,6 @@ export interface PSMParserOptions {
     shadow: string;
     fallbacks?: PSMMigrationFallbackRules;
 }
-
 export interface PSMModel {
     view?: boolean;
     query?: {
@@ -146,7 +135,6 @@ export interface PSMModel {
     };
     comment?: string;
 }
-
 export interface ModelOptions {
     name: string;
     model: string;
@@ -163,79 +151,66 @@ export interface ModelOptions {
     isGenerated: FieldOption[];
     indexes: IndexOptions[];
 }
-
 export interface MigrationOptions {
     sql: string;
     url: string;
     label: string;
 }
-
 export interface PSMMigrationOptions {
     check: string;
     core: string;
     url: string;
     migrate: string;
 }
-
 export interface Migrated {
     sid: string;
     date: Date;
 }
-
 export interface PSMMigratedOptions {
     url: string;
     sys: string;
     sids?: string[];
 }
-
 export interface PSMMigrationResult {
     success?: boolean;
     messages?: string[];
     error?: any;
 }
-
 export interface PSMGenerator {
     migrate(): string;
     check(): string;
     core(): string;
 }
-
 export interface PSMMigrated {
     messages: string[];
     error?: any;
     success?: boolean;
     migrated?: Migrated[];
 }
-
 export interface PSMExecute {
     messages: string[];
     error?: any;
     success?: boolean;
-    rows?: any[]; // adicionado para consultas SELECT
+    rows?: any[];
 }
-
 export interface PSMDumpResponse {
     error?: Error;
     output?: string;
     file?: string;
 }
-
 export type CustomScript = {
     group: string;
     filename: string;
     raw: string;
 };
-
 export interface CustomResources {
     get resources(): Record<string, CustomScript[]>;
     execute(): Promise<void>;
     createFiles(): void;
 }
-
 export type RestoreResult = {
     result: boolean;
 };
-
 export interface PSMMigrator {
     core(): Promise<PSMMigrationResult>;
     test(): Promise<PSMMigrationResult>;
@@ -246,14 +221,12 @@ export interface PSMMigrator {
     restore(backup: string): Promise<RestoreResult>;
     executeRaw(scripts: CustomScript[]): string;
 }
-
 export interface QueryBuilderResult {
     sql: string;
     template: string[];
     values: any;
     push(...builders: QueryBuilderResult[]): void;
 }
-
 export type ScriptLine = {
     line: number;
     filename: string;
@@ -261,10 +234,10 @@ export type ScriptLine = {
     column: number;
     func: string;
 };
-
-export type RevisionProps<Props extends { [p in keyof Props]: Props[p] }> = Props;
+export type RevisionProps<Props extends {
+    [p in keyof Props]: Props[p];
+}> = Props;
 export type RevisionWhen<Props> = boolean | ((props: RevisionProps<Props>) => boolean) | ((props: RevisionProps<Props>) => Promise<boolean>);
-
 export interface RegistryOptions<Props> {
     identifier?: string;
     connection?: string | "default" | "standard" | "superuser";
@@ -275,27 +248,15 @@ export interface RegistryOptions<Props> {
     line?: ScriptLine;
     when?: RevisionWhen<Props>;
 }
-
 export interface SimpleFile {
     filename: string;
 }
-
 export type PatchOptions<Props> = RegistryOptions<Props> & {
     module?: NodeModule | SimpleFile;
 };
-
 export type RevisionListener = {
     onRegister?(error: Error, onRelease: () => void): void;
 };
-
-type SQLTemplate = (
-    sqlTemplate: TemplateStringsArray,
-    ...values: any[]
-) => QueryBuilderResult & {
-    sql: SQLTemplate;
-    joins(...builders: QueryBuilderResult[]): void;
-};
-
 export interface SqlPatch<Props> {
     opts: RegistryOptions<Props> & PatchOptions<Props>;
     str: string | QueryBuilderResult;
@@ -303,22 +264,20 @@ export interface SqlPatch<Props> {
     listener?: RevisionListener;
     line: ScriptLine;
 }
-
 export interface PSMDriver {
     migrated: (opts: PSMMigratedOptions) => Promise<PSMMigrated>;
     generator: (opts: PSMParserOptions) => PSMGenerator;
     migrator: (opts: PSMMigrationOptions) => PSMMigrator;
     prepare: (model: ModelOptions) => Promise<any> | void;
-
     /**
      * Retorna uma lista de palavras‑chave SQL específicas do driver para uso no autocompletar.
      * Pode ser síncrona ou assíncrona (retornando Promise).
      */
     getCompletions?: () => string[] | Promise<string[]>;
 }
-
 export interface DriverConfigs {
     driver: string;
     url: string;
     sys: string;
 }
+//# sourceMappingURL=driver.d.ts.map

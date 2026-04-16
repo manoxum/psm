@@ -6,6 +6,8 @@ import {extractModels} from "../extractor/index";
 import {customRandom, random} from "nanoid";
 import {
     DriverConfigs,
+    PSMMigrationFallbackRules,
+    PSMProjectMigrationFile,
     ModelOptions,
     PSMDriver,
     PSMField,
@@ -18,6 +20,71 @@ import {PSMConfigFile} from "../configs";
 
 function write( sql:string, dirname:string, file:string){
     fs.writeFileSync( Path.join( dirname, file ), sql );
+}
+
+function mergeFallbackRules(
+    base: PSMMigrationFallbackRules = {},
+    next: PSMMigrationFallbackRules = {}
+): PSMMigrationFallbackRules {
+    const models = { ...(base.models || {}) };
+
+    Object.entries(next.models || {}).forEach(([model, fields]) => {
+        models[model] = {
+            ...(models[model] || {}),
+            ...fields,
+        };
+    });
+
+    return { models };
+}
+
+function compileFallbacks(file?: PSMProjectMigrationFile): PSMMigrationFallbackRules | undefined {
+    const migrations = file?.migrations || [];
+    if (!migrations.length) return undefined;
+
+    return migrations.reduce<PSMMigrationFallbackRules>((rules, migration) => {
+        return mergeFallbackRules(rules, migration.rules?.etl?.fallback || {});
+    }, {});
+}
+
+function loadProjectMigration(home: string): { file?: string; rules?: PSMProjectMigrationFile; fallbacks?: PSMMigrationFallbackRules } {
+    const candidates = [
+        "psm.migration.yml",
+        "psm.migration.yaml",
+        "psm.migration.json",
+    ];
+
+    for (const filename of candidates) {
+        const fullpath = Path.join(home, filename);
+        if (!fs.existsSync(fullpath)) continue;
+
+        const rules = yaml.parse(fs.readFileSync(fullpath, "utf-8")) as PSMProjectMigrationFile;
+
+        return {
+            file: filename,
+            rules,
+            fallbacks: compileFallbacks(rules),
+        };
+    }
+
+    return {};
+}
+
+async function loadDriver(driverId: string): Promise<PSMDriver> {
+    try {
+        return await import(driverId) as PSMDriver;
+    } catch (error: any) {
+        if (driverId.startsWith("@prisma-psm/")) {
+            const pkg = driverId.split("/")[1];
+            const localDriver = Path.resolve(__dirname, "../../../", `psm-${pkg}`, "src", "index.js");
+
+            if (fs.existsSync(localDriver)) {
+                return await import(localDriver) as PSMDriver;
+            }
+        }
+
+        throw error;
+    }
 }
 
 
@@ -37,6 +104,7 @@ export function generate(){
                 const definition = Path.join( output, "definitions");
                 const revisions = Path.join( output, "revisions");
                 const next = Path.join( output, "next");
+                const migrationConfig = loadProjectMigration(home);
 
                 fs.mkdirSync( definition, { recursive: true });
                 fs.mkdirSync( revisions, { recursive: true });
@@ -51,7 +119,7 @@ export function generate(){
 
 
 
-                const driver = await import( configs.driver ) as PSMDriver;
+                const driver = await loadDriver(configs.driver);
 
 
                 let usePrepare= ( model:ModelOptions )=>{
@@ -81,6 +149,7 @@ export function generate(){
                     shadow: `psm_shadow_${rand()}`,
                     backup: "backup",
                     sys: configs.sys||"sys",
+                    fallbacks: migrationConfig.fallbacks,
                 };
 
 
@@ -140,6 +209,11 @@ export function generate(){
                         schema: options.schemaPath,
                         sys: configs.sys||"sys",
                     },
+                    sidecars: {
+                        migration: migrationConfig.file,
+                    },
+                    migrationFile: migrationConfig.rules,
+                    fallbacks: migrationConfig.fallbacks,
                     test: {
                         check: !!test? "checked": "skipped",
                         success: test?.success,

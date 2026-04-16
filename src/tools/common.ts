@@ -30,6 +30,23 @@ export function resolveDatabaseUrl(value?: string, fallback?: string) {
     return fallback?.includes("://") ? fallback : undefined;
 }
 
+async function loadDriver(driverId: string): Promise<PSMDriver> {
+    try {
+        return await import(driverId) as PSMDriver;
+    } catch (error: any) {
+        if (driverId.startsWith("@prisma-psm/")) {
+            const pkg = driverId.split("/")[1];
+            const localDriver = Path.resolve(__dirname, "../../../", `psm-${pkg}`, "src", "index.js");
+
+            if (fs.existsSync(localDriver)) {
+                return await import(localDriver) as PSMDriver;
+            }
+        }
+
+        throw error;
+    }
+}
+
 export async function psmLockup( opts:CommonSchema ){
     let schema = opts.schema;
     if( !schema ) {
@@ -57,7 +74,7 @@ export async function psmLockup( opts:CommonSchema ){
     const psm = yaml.parse( fs.readFileSync( psm_yml ).toString() ) as PSMConfigFile;
     loadEnv(home);
 
-    const driver = await import( opts?.driver ?? psm.psm.driver ) as PSMDriver;
+    const driver = await loadDriver( opts?.driver ?? psm.psm.driver );
 
     if(!!psm.migration && !psm.migration.instante && psm.migration["instate"]){
         psm.migration.instante = psm.migration["instate"];

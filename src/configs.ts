@@ -1,3 +1,5 @@
+import { PSMMigrationFallbackRules, PSMProjectMigrationFile } from "./driver";
+
 export interface PSMConfigFile {
     psm: {
         migration: string
@@ -7,6 +9,11 @@ export interface PSMConfigFile {
         output: string
         schema: string
     },
+    sidecars?: {
+        migration?: string
+    },
+    migrationFile?: PSMProjectMigrationFile,
+    fallbacks?: PSMMigrationFallbackRules,
     test: {
         check: "checked"|"skipped",
         success: boolean,
